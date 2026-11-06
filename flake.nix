@@ -1,5 +1,5 @@
 {
-  description = "randobooru - Rust Discord bot";
+  description = "Super Simple Booru Bot - Rust Discord bot";
 
   inputs = {
     nixpkgs.url = "github:NixOS/nixpkgs/nixos-unstable";
@@ -13,7 +13,7 @@
       pkgs = nixpkgs.legacyPackages.${system};
     in {
       default = pkgs.rustPlatform.buildRustPackage {
-        pname = "randobooru";
+        pname = "super-simple-booru-bot";
         version = "26.1.1-alpha";
         src = pkgs.lib.fileset.toSource {
           root = ./.;
@@ -31,7 +31,7 @@
         buildInputs = [ pkgs.openssl ];
         meta = {
           description = "Discord bot that returns random booru images from configurable tag presets";
-          mainProgram = "randobooru";
+          mainProgram = "super-simple-booru-bot";
           platforms = [ "x86_64-linux" ];
         };
       };
@@ -40,8 +40,8 @@
     apps = forAllSystems (system: {
       default = {
         type = "app";
-        program = "${self.packages.${system}.default}/bin/randobooru";
-        meta.description = "Run randobooru from a provisioned runtime state directory";
+        program = "${self.packages.${system}.default}/bin/super-simple-booru-bot";
+        meta.description = "Run Super Simple Booru Bot from a provisioned runtime state directory";
       };
     });
 
@@ -58,28 +58,28 @@
         modules = [ self.nixosModules.default {
           nixpkgs.hostPlatform = system;
           system.stateVersion = "26.05";
-          services.randobooru = {
+          services.superSimpleBooruBot = {
             enable = true;
-            secretsFile = "/var/lib/randobooru/runtime-only.toml";
+            secretsFile = "/var/lib/super-simple-booru-bot/runtime-only.toml";
             dbPath = "audit.sqlite3";
           };
         } ];
       };
-      service = testSystem.config.systemd.services.randobooru;
+      service = testSystem.config.systemd.services.super-simple-booru-bot;
       source = self.packages.${system}.default.src;
     in {
       module-contract =
-        assert service.environment.RANDOBOORU_SECRETS_FILE == "/var/lib/randobooru/runtime-only.toml";
-        assert service.environment.RANDOBOORU_DB_PATH == "audit.sqlite3";
+        assert service.environment.SUPER_SIMPLE_BOORU_BOT_SECRETS_FILE == "/var/lib/super-simple-booru-bot/runtime-only.toml";
+        assert service.environment.SUPER_SIMPLE_BOORU_BOT_DB_PATH == "audit.sqlite3";
         assert service.serviceConfig.Restart == "on-failure";
-        assert !(builtins.hasAttr "secretsText" testSystem.options.services.randobooru);
+        assert !(builtins.hasAttr "secretsText" testSystem.options.services.superSimpleBooruBot);
         assert !(pkgs.lib.hasInfix "printf" service.preStart);
-        pkgs.runCommand "randobooru-module-contract" {} "touch $out";
-      source-contract = pkgs.runCommand "randobooru-source-contract" { src = source; } ''
+        pkgs.runCommand "super-simple-booru-bot-module-contract" {} "touch $out";
+      source-contract = pkgs.runCommand "super-simple-booru-bot-source-contract" { src = source; } ''
         test -f "$src/Cargo.toml"
         test -d "$src/src"
         test ! -e "$src/secrets.toml"
-        test ! -e "$src/randobooru.sqlite3"
+        test ! -e "$src/super-simple-booru-bot.sqlite3"
         test ! -e "$src/target"
         test ! -e "$src/.git"
         touch "$out"
@@ -87,17 +87,17 @@
     });
 
     nixosModules.default = { config, lib, pkgs, ... }: let
-      cfg = config.services.randobooru;
+      cfg = config.services.superSimpleBooruBot;
     in {
-      options.services.randobooru = {
-        enable = lib.mkEnableOption "randobooru Discord bot";
+      options.services.superSimpleBooruBot = {
+        enable = lib.mkEnableOption "Super Simple Booru Bot Discord bot";
         package = lib.mkOption {
           type = lib.types.package;
           default = self.packages.${pkgs.stdenv.hostPlatform.system}.default;
         };
         dataDir = lib.mkOption {
           type = lib.types.str;
-          default = "/var/lib/randobooru";
+          default = "/var/lib/super-simple-booru-bot";
         };
         secretsFile = lib.mkOption {
           type = lib.types.str;
@@ -106,40 +106,40 @@
         };
         dbPath = lib.mkOption {
           type = lib.types.str;
-          default = "randobooru.sqlite3";
+          default = "super-simple-booru-bot.sqlite3";
         };
       };
 
       config = lib.mkIf cfg.enable {
         assertions = [
-          { assertion = lib.hasPrefix "/" cfg.dataDir; message = "randobooru.dataDir must be absolute"; }
-          { assertion = lib.hasPrefix "/" cfg.secretsFile && !(lib.hasPrefix builtins.storeDir cfg.secretsFile); message = "randobooru.secretsFile must be a runtime path outside the Nix store"; }
+          { assertion = lib.hasPrefix "/" cfg.dataDir; message = "super-simple-booru-bot.dataDir must be absolute"; }
+          { assertion = lib.hasPrefix "/" cfg.secretsFile && !(lib.hasPrefix builtins.storeDir cfg.secretsFile); message = "super-simple-booru-bot.secretsFile must be a runtime path outside the Nix store"; }
         ];
-        users.users.randobooru = {
+        users.users.super-simple-booru-bot = {
           isSystemUser = true;
-          group = "randobooru";
+          group = "super-simple-booru-bot";
           home = cfg.dataDir;
           createHome = true;
         };
-        users.groups.randobooru = {};
-        systemd.tmpfiles.rules = [ "d ${cfg.dataDir} 0700 randobooru randobooru -" ];
+        users.groups.super-simple-booru-bot = {};
+        systemd.tmpfiles.rules = [ "d ${cfg.dataDir} 0700 super-simple-booru-bot super-simple-booru-bot -" ];
 
-        systemd.services.randobooru = {
-          description = "randobooru Discord bot";
+        systemd.services.super-simple-booru-bot = {
+          description = "Super Simple Booru Bot Discord bot";
           after = [ "network-online.target" ];
           wants = [ "network-online.target" ];
           wantedBy = [ "multi-user.target" ];
           environment = {
-            RANDOBOORU_SECRETS_FILE = cfg.secretsFile;
-            RANDOBOORU_DB_PATH = cfg.dbPath;
+            SUPER_SIMPLE_BOORU_BOT_SECRETS_FILE = cfg.secretsFile;
+            SUPER_SIMPLE_BOORU_BOT_DB_PATH = cfg.dbPath;
             SSL_CERT_FILE = "${pkgs.cacert}/etc/ssl/certs/ca-bundle.crt";
           };
           serviceConfig = {
             Type = "simple";
-            User = "randobooru";
-            Group = "randobooru";
+            User = "super-simple-booru-bot";
+            Group = "super-simple-booru-bot";
             WorkingDirectory = cfg.dataDir;
-            ExecStart = "${cfg.package}/bin/randobooru";
+            ExecStart = "${cfg.package}/bin/super-simple-booru-bot";
             Restart = "on-failure";
             RestartSec = "5s";
             UMask = "0077";
@@ -152,7 +152,7 @@
           };
           preStart = ''
             if ! test -r ${lib.escapeShellArg cfg.secretsFile}; then
-              echo ${lib.escapeShellArg ("randobooru: runtime secrets file is missing or unreadable: " + cfg.secretsFile)} >&2
+              echo ${lib.escapeShellArg ("super-simple-booru-bot: runtime secrets file is missing or unreadable: " + cfg.secretsFile)} >&2
               exit 1
             fi
           '';

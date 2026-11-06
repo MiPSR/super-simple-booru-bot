@@ -13,7 +13,7 @@ use anyhow::Result;
 async fn main() -> Result<()> {
 	if let Err(err) = app::run().await {
 		cli::error(&format!("{err:#}"), "FATAL");
-		return Err(anyhow::anyhow!("randobooru stopped; see the error above"));
+		return Err(anyhow::anyhow!("super-simple-booru-bot stopped; see the error above"));
 	}
 	Ok(())
 }

@@ -11,7 +11,7 @@ pub(crate) struct SecretConfig {
 }
 
 pub(crate) fn parse() -> Result<SecretConfig> {
-	let path = env::var("RANDOBOORU_SECRETS_FILE").unwrap_or_else(|_| "secrets.toml".into());
+	let path = env::var("SUPER_SIMPLE_BOORU_BOT_SECRETS_FILE").unwrap_or_else(|_| "secrets.toml".into());
 	parse_path(std::path::Path::new(&path))
 }
 
@@ -58,7 +58,7 @@ mod tests {
 	#[test]
 	fn secret_errors_never_print_credential_lines_and_permissions_are_checked() {
 		let path = std::env::temp_dir().join(format!(
-			"randobooru-secrets-test-{}",
+			"super-simple-booru-bot-secrets-test-{}",
 			crate::app::post_cache::unique_id()
 		));
 		let mut options = fs::OpenOptions::new();

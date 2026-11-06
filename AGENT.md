@@ -6,11 +6,11 @@ There is intentionally no NSFW flag or content-rating behavior.
 
 ## Runtime and deployment
 
-- `RANDOBOORU_SECRETS_FILE` selects a **runtime** TOML file; manual default is
-  `./secrets.toml`. NixOS default is `/var/lib/randobooru/secrets.toml`.
+- `SUPER_SIMPLE_BOORU_BOT_SECRETS_FILE` selects a **runtime** TOML file; manual default is
+  `./secrets.toml`. NixOS default is `/var/lib/super-simple-booru-bot/secrets.toml`.
 - Never import, generate or embed secret contents through Nix. Secrets are manually
   provisioned, service-user owned and mode `0600`. The state directory is `0700`.
-- `RANDOBOORU_DB_PATH` selects SQLite; default is `randobooru.sqlite3`, relative to
+- `SUPER_SIMPLE_BOORU_BOT_DB_PATH` selects SQLite; default is `super-simple-booru-bot.sqlite3`, relative to
   the working directory. NixOS exposes `dataDir`, `secretsFile` (a string) and `dbPath`.
 - The flake defines and exports the package directly, including its build-input
   selection. Keep runtime secrets and databases out of build inputs.

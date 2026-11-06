@@ -1,4 +1,4 @@
-# randobooru
+# Super Simple Booru Bot
 
 Database-configured Rust Discord bot. Fetch random posts, maintain per-channel
 history, and manage providers and permissions through a private `/administrate`
@@ -24,15 +24,15 @@ Add the flake to your **own** NixOS flake (replace `host` and existing module pa
 ```nix
 {
   inputs.nixpkgs.url = "github:NixOS/nixpkgs/nixos-unstable";
-  inputs.randobooru.url = "github:MiPSR/randobooru";
+  inputs.superSimpleBooruBot.url = "github:MiPSR/super-simple-booru-bot";
 
-  outputs = { nixpkgs, randobooru, ... }: {
+  outputs = { nixpkgs, superSimpleBooruBot, ... }: {
     nixosConfigurations.host = nixpkgs.lib.nixosSystem {
       system = "x86_64-linux";
       modules = [
         ./configuration.nix
-        randobooru.nixosModules.default
-        { services.randobooru.enable = true; }
+        superSimpleBooruBot.nixosModules.default
+        { services.superSimpleBooruBot.enable = true; }
       ];
     };
   };
@@ -41,10 +41,10 @@ Add the flake to your **own** NixOS flake (replace `host` and existing module pa
 
 The defaults are:
 
-- dedicated user/group: `randobooru`;
-- working directory: `/var/lib/randobooru`, mode `0700`;
-- runtime secrets: `/var/lib/randobooru/secrets.toml`;
-- database: `/var/lib/randobooru/randobooru.sqlite3`.
+- dedicated user/group: `super-simple-booru-bot`;
+- working directory: `/var/lib/super-simple-booru-bot`, mode `0700`;
+- runtime secrets: `/var/lib/super-simple-booru-bot/secrets.toml`;
+- database: `/var/lib/super-simple-booru-bot/super-simple-booru-bot.sqlite3`.
 
 Rebuild your configuration to create the service account and data directory:
 
@@ -58,9 +58,9 @@ contents**. Create the file at runtime using your existing provisioning mechanis
 or interactively:
 
 ```sh
-sudo install -d -m 0700 -o randobooru -g randobooru /var/lib/randobooru
-sudo install -m 0600 -o randobooru -g randobooru /dev/null /var/lib/randobooru/secrets.toml
-sudoedit /var/lib/randobooru/secrets.toml
+sudo install -d -m 0700 -o super-simple-booru-bot -g super-simple-booru-bot /var/lib/super-simple-booru-bot
+sudo install -m 0600 -o super-simple-booru-bot -g super-simple-booru-bot /dev/null /var/lib/super-simple-booru-bot/secrets.toml
+sudoedit /var/lib/super-simple-booru-bot/secrets.toml
 ```
 
 Do not run that `install /dev/null` command over an existing secrets file: it
@@ -75,23 +75,23 @@ discord_application_id = 123456789012345678
 Then start the service:
 
 ```sh
-sudo systemctl restart randobooru
-systemctl status randobooru --no-pager
+sudo systemctl restart super-simple-booru-bot
+systemctl status super-simple-booru-bot --no-pager
 ```
 
 Errors go to stderr and systemd's journal, not to application-managed log files.
-For more than the status summary, use `journalctl -u randobooru -b`. Startup failures
+For more than the status summary, use `journalctl -u super-simple-booru-bot -b`. Startup failures
 exit nonzero; systemd retries with `Restart=on-failure`. Requests are logged by type,
 not by exact URL/header. Secrets parse failures do not print the credential lines.
 
 ### Custom runtime locations
 
 ```nix
-services.randobooru = {
+services.superSimpleBooruBot = {
   enable = true;
-  dataDir = "/var/lib/randobooru";
-  secretsFile = "/var/lib/randobooru/secrets.toml"; # STRING, runtime path only
-  dbPath = "randobooru.sqlite3"; # relative to dataDir, or an absolute writable path
+  dataDir = "/var/lib/super-simple-booru-bot";
+  secretsFile = "/var/lib/super-simple-booru-bot/secrets.toml"; # STRING, runtime path only
+  dbPath = "super-simple-booru-bot.sqlite3"; # relative to dataDir, or an absolute writable path
 };
 ```
 
@@ -109,7 +109,7 @@ From a checkout:
 nix build
 ```
 
-The executable is `result/bin/randobooru`. The package is defined directly in
+The executable is `result/bin/super-simple-booru-bot`. The package is defined directly in
 `flake.nix`, which includes only source/build inputs, never the runtime secrets,
 database or `target` directory. Use `nix build`, not the legacy `nix-build` command.
 When developing in a Git checkout, add new source files to Git before evaluating
@@ -119,15 +119,15 @@ databases to Git to work around a build error.
 Run from a separate state directory, not from the checkout:
 
 ```sh
-install -d -m 0700 "$HOME/.local/state/randobooru"
+install -d -m 0700 "$HOME/.local/state/super-simple-booru-bot"
 # Create secrets.toml there and chmod it to 0600 before running.
-cd "$HOME/.local/state/randobooru"
-/absolute/path/to/checkout/result/bin/randobooru
+cd "$HOME/.local/state/super-simple-booru-bot"
+/absolute/path/to/checkout/result/bin/super-simple-booru-bot
 ```
 
-Paths can instead be set with `RANDOBOORU_SECRETS_FILE` and `RANDOBOORU_DB_PATH`.
+Paths can instead be set with `SUPER_SIMPLE_BOORU_BOT_SECRETS_FILE` and `SUPER_SIMPLE_BOORU_BOT_DB_PATH`.
 There are no CLI flags or doctor mode. For a direct flake run, first enter the state
-directory containing your runtime secrets, then use `nix run github:MiPSR/randobooru`.
+directory containing your runtime secrets, then use `nix run github:MiPSR/super-simple-booru-bot`.
 
 Development uses the pinned flake toolchain:
 

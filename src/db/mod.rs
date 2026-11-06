@@ -159,7 +159,7 @@ fn initialize_schema(conn: &Connection) -> Result<()> {
 	let version: i64 = conn.query_row("PRAGMA user_version", [], |r| r.get(0))?;
 	anyhow::ensure!(
 		version <= 1,
-		"database was created by a newer randobooru version"
+		"database was created by a newer super-simple-booru-bot version"
 	);
 	let old_patterns: bool = conn.query_row("SELECT EXISTS(SELECT 1 FROM sqlite_master WHERE name='boorus') AND NOT EXISTS(SELECT 1 FROM sqlite_master WHERE name='server_tag_whitelist')", [], |r| r.get(0))?;
 	let tx = conn.unchecked_transaction()?;

@@ -618,10 +618,10 @@ mod tests {
 			fill_runtime_template(
 				&booru,
 				&runtime_values,
-				"Randobooru Discord Bot - {name}",
+				"Super Simple Booru Bot - {name}",
 				false
 			),
-			"Randobooru Discord Bot - user name"
+			"Super Simple Booru Bot - user name"
 		);
 	}
 

@@ -664,7 +664,7 @@ pub(crate) async fn run() -> Result<()> {
 		env::args().len() == 1,
 		"no command-line options are supported; configure runtime paths with environment variables"
 	);
-	let db_path = env::var("RANDOBOORU_DB_PATH").unwrap_or_else(|_| "randobooru.sqlite3".into());
+	let db_path = env::var("SUPER_SIMPLE_BOORU_BOT_DB_PATH").unwrap_or_else(|_| "super-simple-booru-bot.sqlite3".into());
 
 	let mut is_reload = false;
 	loop {
