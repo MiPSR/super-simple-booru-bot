@@ -38,6 +38,7 @@ pub(crate) fn from_json(name: &str, json: &str) -> Result<BooruRow> {
 	Ok(row)
 }
 
+#[allow(dead_code)]
 pub(crate) fn edit_field(row: &mut BooruRow, field: &str, value: &str) -> Result<()> {
 	fn boolean(value: &str) -> Result<bool> {
 		match value.trim().to_ascii_lowercase().as_str() {

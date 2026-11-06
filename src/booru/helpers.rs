@@ -50,6 +50,16 @@ pub(super) async fn ensure_success(
 	}
 
 	let content_type = response_content_type(&response);
+	// Some providers (notably Zerochan) return HTTP 500 while still serving a
+	// valid JSON body. Accept that case so the caller can parse the payload.
+	if status.as_u16() == 500
+		&& content_type
+			.to_ascii_lowercase()
+			.contains("application/json")
+	{
+		return Ok(response);
+	}
+
 	bail!(
 		"{kind} request failed for {} with HTTP {status} content-type={content_type}",
 		booru.name,

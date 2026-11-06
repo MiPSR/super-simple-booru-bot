@@ -915,7 +915,7 @@ fn form_fields(handler: &Handler, guild: Option<i64>, a: &Action) -> Result<Vec<
 	let blank = String::new();
 	Ok(match (a.category.as_str(),a.operation.as_str()) {
 		("boorus","add")=>vec![("name","Provider name",blank.clone(),true,false),("description","Slash command description",blank.clone(),false,false),("urls","URLs JSON",r#"{"posts_url":"https://example.org/posts?tags={tags}&page={page}&limit={limit}"}"#.into(),true,true),("paths","JSON paths",r#"{"posts_path":[],"file_url_path":["file_url"],"detail_id_path":["id"],"count_path":[],"source_url_path":[],"detail_file_url_path":[],"detail_source_url_path":[]}"#.into(),true,true),("options","Options JSON",r#"{"embed_image":false,"max_tags":9,"page_size":100,"page_base":1,"tag_separator":" ","encode_tag_separator":true,"tag_spaces_as_plus":false,"character_space_replacement":"_","headers":{},"env_params":[],"fetch_options":{}}"#.into(),true,true)],
-		("boorus","edit")=>vec![("field","Field name (e.g. fetch_options)",blank.clone(),true,false),("value","New value (null clears optional URLs)",blank.clone(),false,true)],
+		("boorus","edit")=>{let row=provider(&db,a)?;let (urls,paths,options)=provider_form_values(&row);vec![("name","Provider name",row.name,true,false),("description","Slash command description",row.description,false,false),("urls","URLs JSON",urls,true,true),("paths","JSON paths",paths,true,true),("options","Options JSON",options,true,true)]},
 		("boorus","parameters")=>vec![("operation","set or delete", "set".into(),true,false),("key","Parameter key",blank.clone(),true,false),("value","Value (hidden in panel)",blank.clone(),false,true)],
 		("boorus","test")=>vec![("tags","Test tags (comma-separated)",db.get_setting(&format!("test_tags:{}",target(a)?))?.unwrap_or_else(||"solo".into()),true,false)],
 		("patterns","add")=>vec![("name","Pattern command name",blank.clone(),true,false),("booru","Provider name",blank.clone(),true,false),("included","Included tags (comma-separated)",blank.clone(),true,true),("excluded","Excluded tags (comma-separated)",blank.clone(),false,true)],
@@ -940,6 +940,39 @@ fn csv(value: &str) -> Vec<String> {
 		.filter(|s| !s.is_empty())
 		.collect()
 }
+fn provider_form_values(row: &crate::db::BooruRow) -> (String, String, String) {
+	let urls = serde_json::json!({
+		"count_url": row.count_url,
+		"posts_url": row.posts_url,
+		"detail_url": row.detail_url,
+		"post_url": row.post_url,
+	});
+	let paths = serde_json::json!({
+		"count_path": serde_json::from_str::<serde_json::Value>(&row.count_path_json).unwrap_or_else(|_| serde_json::json!([])),
+		"posts_path": serde_json::from_str::<serde_json::Value>(&row.posts_path_json).unwrap_or_else(|_| serde_json::json!([])),
+		"file_url_path": serde_json::from_str::<serde_json::Value>(&row.file_url_path_json).unwrap_or_else(|_| serde_json::json!([])),
+		"source_url_path": serde_json::from_str::<serde_json::Value>(&row.source_url_path_json).unwrap_or_else(|_| serde_json::json!([])),
+		"detail_id_path": serde_json::from_str::<serde_json::Value>(&row.detail_id_path_json).unwrap_or_else(|_| serde_json::json!([])),
+		"detail_file_url_path": serde_json::from_str::<serde_json::Value>(&row.detail_file_url_path_json).unwrap_or_else(|_| serde_json::json!([])),
+		"detail_source_url_path": serde_json::from_str::<serde_json::Value>(&row.detail_source_url_path_json).unwrap_or_else(|_| serde_json::json!([])),
+	});
+	let options = serde_json::json!({
+		"embed_image": row.embed_image,
+		"max_tags": row.max_tags,
+		"page_size": row.page_size,
+		"page_base": row.page_base,
+		"tag_separator": row.tag_separator,
+		"encode_tag_separator": row.encode_tag_separator,
+		"tag_spaces_as_plus": row.tag_spaces_as_plus,
+		"character_space_replacement": row.character_space_replacement,
+		"pace_ms": row.pace_ms,
+		"headers": serde_json::from_str::<serde_json::Value>(&row.headers_json).unwrap_or_else(|_| serde_json::json!({})),
+		"env_params": serde_json::from_str::<serde_json::Value>(&row.env_params_json).unwrap_or_else(|_| serde_json::json!([])),
+		"fetch_options": serde_json::from_str::<serde_json::Value>(&row.fetch_options_json).unwrap_or_else(|_| serde_json::json!({})),
+	});
+	(urls.to_string(), paths.to_string(), options.to_string())
+}
+
 fn new_provider(a: &Action) -> Result<crate::db::BooruRow> {
 	let mut map = serde_json::Map::new();
 	for key in ["urls", "paths", "options"] {
@@ -964,8 +997,7 @@ fn validate_form(handler: &Handler, guild: Option<i64>, a: &Action) -> Result<()
 			new_provider(a)?;
 		}
 		("boorus", "edit") => {
-			let mut row = provider(&db, a)?;
-			super::admin::booru::edit_field(&mut row, field(a, "field"), field(a, "value"))?;
+			new_provider(a)?;
 		}
 		("boorus", "parameters") => {
 			ensure!(
@@ -1043,8 +1075,11 @@ fn apply(handler: &Handler, user: u64, guild: Option<i64>, a: &Action) -> Result
 			db.add_booru(&new_provider(a)?)?;
 		}
 		("boorus", "edit") => {
-			let mut row = provider(&db, a)?;
-			super::admin::booru::edit_field(&mut row, field(a, "field"), field(a, "value"))?;
+			let existing = provider(&db, a)?;
+			let mut row = new_provider(a)?;
+			row.id = existing.id;
+			row.enabled = existing.enabled;
+			row.supports_character = existing.supports_character;
 			db.update_booru(&row)?;
 		}
 		("boorus", "delete") => db.delete_booru(&provider(&db, a)?.name)?,

@@ -306,8 +306,25 @@ impl BooruClient {
 		}
 
 		let bytes = bounded_body(response, 8 * 1024 * 1024).await?;
-		serde_json::from_slice(&bytes)
-			.with_context(|| format!("invalid {kind} JSON from {}", booru.name))
+		if let Ok(value) = serde_json::from_slice(&bytes) {
+			return Ok(value);
+		}
+
+		// Some providers (notably Zerochan) embed a valid JSON document in a
+		// response that also contains leading/trailing junk.
+		let text = String::from_utf8_lossy(&bytes);
+		for i in 0..text.len() {
+			let b = text.as_bytes()[i];
+			if b != b'{' && b != b'[' {
+				continue;
+			}
+			let mut de = serde_json::Deserializer::from_str(&text[i..]);
+			if let Ok(value) = Value::deserialize(&mut de) {
+				return Ok(value);
+			}
+		}
+
+		bail!("invalid {kind} JSON from {}", booru.name)
 	}
 
 	fn apply_headers(
