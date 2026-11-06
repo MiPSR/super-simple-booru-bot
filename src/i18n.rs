@@ -81,10 +81,6 @@ impl I18n {
 		self.text("channel_not_allowed")
 	}
 
-	pub fn channel_tag_blocked(&self, tag: &str) -> String {
-		self.render("channel_tag_blocked", &[("tag", tag)])
-	}
-
 	pub fn command_not_registered(&self) -> &'static str {
 		self.text("command_not_registered")
 	}

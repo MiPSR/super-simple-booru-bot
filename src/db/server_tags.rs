@@ -26,17 +26,12 @@ impl Database {
 	}
 
 	pub fn remove_server_tag(&self, guild_id: i64, tag_name: &str) -> Result<()> {
-		let tx = self.connection().unchecked_transaction()?;
-		tx.execute(
-			"DELETE FROM channel_patterns WHERE guild_id=?1 AND pattern_name=?2",
-			params![guild_id, tag_name],
-		)?;
-		tx.execute(
-			"DELETE FROM server_tag_whitelist WHERE guild_id = ?1 AND tag_name = ?2",
-			params![guild_id, tag_name],
-		)
-		.context("failed to remove server tag")?;
-		tx.commit()?;
+		self.connection()
+			.execute(
+				"DELETE FROM server_tag_whitelist WHERE guild_id = ?1 AND tag_name = ?2",
+				params![guild_id, tag_name],
+			)
+			.context("failed to remove server tag")?;
 		Ok(())
 	}
 

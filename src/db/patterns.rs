@@ -26,6 +26,10 @@ impl Database {
 	) -> Result<()> {
 		let normalized = crate::app::discord_name_component(name);
 		crate::config::validate_command_name(&normalized)?;
+		anyhow::ensure!(
+			name == normalized,
+			"pattern name must be lowercase letters, digits or hyphens"
+		);
 		for lang in crate::i18n::I18n::available_languages() {
 			anyhow::ensure!(
 				crate::i18n::I18n::load(lang)?

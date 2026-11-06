@@ -645,6 +645,7 @@ async fn page(
 				],
 				"patterns" => &[
 					("add", "Add / replace"),
+					("edit", "Edit"),
 					("delete", "Delete"),
 					("test", "Test"),
 				],
@@ -652,7 +653,6 @@ async fn page(
 					("add", "Add"),
 					("edit", "Edit config"),
 					("delete", "Remove"),
-					("patterns", "Tag blacklist"),
 				],
 				"settings" => &[
 					("add", "Add"),
@@ -848,16 +848,14 @@ fn items(
 					continue;
 				}
 				for c in db.get_guild_channels(s.guild_id)? {
-					let patterns = db.get_channel_patterns(c.guild_id, c.channel_id)?;
 					out.push((
 						format!("{}/{}", c.guild_id, c.channel_id),
 						format!(
-							"{} / #{}: lang={} banned={} blocked={}",
+							"{} / #{}: lang={} banned={}",
 							s.name,
 							c.channel_id,
 							c.language.as_deref().unwrap_or("default"),
-							c.banned_tags.join(","),
-							patterns.join(",")
+							c.banned_tags.join(",")
 						),
 					));
 				}
@@ -919,10 +917,11 @@ fn form_fields(handler: &Handler, guild: Option<i64>, a: &Action) -> Result<Vec<
 		("boorus","parameters")=>vec![("operation","set or delete", "set".into(),true,false),("key","Parameter key",blank.clone(),true,false),("value","Value (hidden in panel)",blank.clone(),false,true)],
 		("boorus","test")=>vec![("tags","Test tags (comma-separated)",db.get_setting(&format!("test_tags:{}",target(a)?))?.unwrap_or_else(||"solo".into()),true,false)],
 		("patterns","add")=>vec![("name","Pattern command name",blank.clone(),true,false),("booru","Provider name",blank.clone(),true,false),("included","Included tags (comma-separated)",blank.clone(),true,true),("excluded","Excluded tags (comma-separated)",blank.clone(),false,true)],
+		("patterns","edit")=>{let id=target(a)?.parse::<i64>()?;let p=db.get_tag_patterns(None)?.into_iter().find(|p|p.id==id).context("pattern no longer exists")?;let b=db.get_booru_by_id(p.booru_id)?.context("provider missing")?;let mut included=Vec::new();let mut excluded=Vec::new();for e in db.get_pattern_entries(p.id)? {if e.is_excluded {excluded.push(e.tag);} else {included.push(e.tag);}} vec![("name","Pattern command name",p.name,true,false),("booru","Provider name",b.name,true,false),("included","Included tags (comma-separated)",included.join(", "),true,true),("excluded","Excluded tags (comma-separated)",excluded.join(", "),false,true)]},
 		("server_tags","add")=>vec![("name","Configured pattern name",blank.clone(),true,false)],
 		("channels","add")=>vec![("guild","Guild ID",guild.map(|v|v.to_string()).unwrap_or_default(),true,false),("channel","Channel ID",blank.clone(),true,false)],
 		("channels","edit")=>{let (g,c)=channel_ids(a)?;let cfg=db.get_channel_config(g,c)?.context("channel not configured")?;vec![("language","Language (blank = default)",cfg.language.unwrap_or_default(),false,false),("banned","Banned tags (comma-separated)",cfg.banned_tags.join(", "),false,true)]},
-		("channels","patterns")=>vec![("operation","add or remove", "add".into(),true,false),("name","Whitelisted pattern name",blank.clone(),true,false)],
+
 		("settings","add"|"edit")=>{let key=a.target.clone().unwrap_or_default();let value=if key.is_empty(){blank.clone()}else{crate::settings::get(&db,&key)?};vec![("key","Setting key",key,true,false),("value","Setting value (blank is allowed)",value,false,true)]},
 		("moderators","add")=>vec![("guild","Guild ID",guild.map(|v|v.to_string()).unwrap_or_default(),true,false),("user","User ID",blank.clone(),true,false)],
 		_=>anyhow::bail!("unsupported form"),
@@ -1009,7 +1008,7 @@ fn validate_form(handler: &Handler, guild: Option<i64>, a: &Action) -> Result<()
 				"parameter key is required"
 			);
 		}
-		("patterns", "add") => {
+		("patterns", "add" | "edit") => {
 			ensure!(
 				!field(a, "name").trim().is_empty() && !csv(field(a, "included")).is_empty(),
 				"pattern name and included tags are required"
@@ -1039,18 +1038,6 @@ fn validate_form(handler: &Handler, guild: Option<i64>, a: &Action) -> Result<()
 			if !lang.is_empty() {
 				crate::i18n::I18n::load(lang)?;
 			}
-		}
-		("channels", "patterns") => {
-			ensure!(
-				matches!(field(a, "operation"), "add" | "remove"),
-				"operation must be add or remove"
-			);
-			let (g, _) = channel_ids(a)?;
-			ensure!(
-				db.get_server_tags(g)?
-					.contains(&field(a, "name").to_string()),
-				"pattern must be enabled for this guild"
-			);
 		}
 		("settings", "add" | "edit") => {
 			crate::settings::validate(field(a, "key"), field(a, "value"))?
@@ -1101,6 +1088,27 @@ fn apply(handler: &Handler, user: u64, guild: Option<i64>, a: &Action) -> Result
 			&csv(field(a, "included")),
 			&csv(field(a, "excluded")),
 		)?,
+		("patterns", "edit") => {
+			let id = target(a)?.parse::<i64>()?;
+			let patterns = db.get_tag_patterns(None)?;
+			let old = patterns
+				.into_iter()
+				.find(|p| p.id == id)
+				.context("pattern no longer exists")?;
+			let old_booru = db
+				.get_booru_by_id(old.booru_id)?
+				.context("provider no longer exists")?;
+			let new_name = field(a, "name");
+			let new_booru = field(a, "booru");
+			let included = csv(field(a, "included"));
+			let excluded = csv(field(a, "excluded"));
+			if old.name == new_name && old_booru.name == new_booru {
+				db.add_tag_pattern(new_name, new_booru, &included, &excluded)?;
+			} else {
+				db.add_tag_pattern(new_name, new_booru, &included, &excluded)?;
+				db.delete_tag_pattern(&old.name, Some(&old_booru.name))?;
+			}
+		}
 		("patterns", "delete") => {
 			let id = target(a)?.parse::<i64>()?;
 			let p = db
@@ -1143,14 +1151,6 @@ fn apply(handler: &Handler, user: u64, guild: Option<i64>, a: &Action) -> Result
 		("channels", "delete") => {
 			let (g, c) = channel_ids(a)?;
 			db.remove_channel(g, c)?;
-		}
-		("channels", "patterns") => {
-			let (g, c) = channel_ids(a)?;
-			if field(a, "operation") == "add" {
-				db.add_channel_pattern(g, c, field(a, "name"))?;
-			} else {
-				db.remove_channel_pattern(g, c, field(a, "name"))?;
-			}
 		}
 		("settings", "add" | "edit") => {
 			if a.operation == "edit" {

@@ -155,8 +155,8 @@ impl BooruConfig {
 
 	pub fn validate(&self) -> Result<()> {
 		ensure!(
-			!crate::app::discord_name_component(&self.name).is_empty(),
-			"provider name must contain letters or digits"
+			!self.name.is_empty() && self.name == crate::app::discord_name_component(&self.name),
+			"provider name must be lowercase letters, digits or hyphens"
 		);
 		validate_command_name(&crate::app::custom_command_name(&self.name))?;
 		ensure!(

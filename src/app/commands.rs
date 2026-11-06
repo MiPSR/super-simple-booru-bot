@@ -444,10 +444,6 @@ fn candidates(
 		db.get_server_tags(guild)?.contains(&pattern),
 		i18n.tag_not_registered(&pattern),
 	)?;
-	guard(
-		!db.get_channel_patterns(guild, channel)?.contains(&pattern),
-		i18n.channel_tag_blocked(&pattern),
-	)?;
 	let mut candidates = Vec::new();
 	for p in db.get_tag_patterns(Some(&pattern))? {
 		let Some(row) = db.get_booru_by_id(p.booru_id)?.filter(|b| b.enabled) else {

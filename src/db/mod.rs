@@ -92,22 +92,6 @@ impl Database {
 			.context("failed to clean orphan booru custom parameters")?;
 		cleaned += conn
 			.execute(
-				"DELETE FROM channel_patterns
-				 WHERE guild_id NOT IN (SELECT guild_id FROM servers)
-				 OR (guild_id, channel_id) NOT IN (SELECT guild_id, channel_id FROM channels)",
-				[],
-			)
-			.context("failed to clean orphan channel patterns")?;
-		cleaned += conn
-			.execute(
-				"DELETE FROM channel_patterns
-				 WHERE (guild_id, pattern_name) NOT IN
-				       (SELECT guild_id, tag_name FROM server_tag_whitelist)",
-				[],
-			)
-			.context("failed to clean channel blacklist names not in server whitelist")?;
-		cleaned += conn
-			.execute(
 				"DELETE FROM server_tag_whitelist
 				 WHERE guild_id NOT IN (SELECT guild_id FROM servers)",
 				[],
@@ -141,6 +125,34 @@ impl Database {
 		for booru in self.get_all_boorus()? {
 			BooruConfig::from_row(&booru)
 				.with_context(|| format!("invalid booru config for {}", booru.name))?;
+		}
+		for name in self.get_unique_pattern_names()? {
+			anyhow::ensure!(
+				name == crate::app::discord_name_component(&name),
+				"invalid tag pattern name {name}"
+			);
+			crate::config::validate_command_name(&name)
+				.with_context(|| format!("invalid tag pattern command name {name}"))?;
+			let reserved = [
+				"administrate",
+				"art-history",
+				"reload",
+				"booru-test",
+				"tag-test",
+			];
+			anyhow::ensure!(
+				!reserved.contains(&name.as_str()),
+				"reserved tag pattern name {name}"
+			);
+		}
+		for name in self.get_unique_pattern_names()? {
+			for booru in self.get_all_boorus()? {
+				anyhow::ensure!(
+					crate::app::custom_command_name(&booru.name)
+						!= crate::app::discord_name_component(&name),
+					"tag pattern {name} collides with provider command"
+				);
+			}
 		}
 		let violations: i64 =
 			conn.query_row("SELECT COUNT(*) FROM pragma_foreign_key_check", [], |r| {
@@ -266,14 +278,6 @@ fn initialize_schema(conn: &Connection) -> Result<()> {
                 FOREIGN KEY (guild_id) REFERENCES servers(guild_id)
             );
 
-            CREATE TABLE IF NOT EXISTS channel_patterns (
-                guild_id INTEGER NOT NULL,
-                channel_id INTEGER NOT NULL,
-                pattern_name TEXT NOT NULL,
-                PRIMARY KEY (guild_id, channel_id, pattern_name),
-                FOREIGN KEY (guild_id, channel_id) REFERENCES channels(guild_id, channel_id)
-            );
-
             CREATE TABLE IF NOT EXISTS server_tag_whitelist (
                 guild_id INTEGER NOT NULL,
                 tag_name TEXT NOT NULL,
@@ -319,6 +323,7 @@ fn initialize_schema(conn: &Connection) -> Result<()> {
 			"MIGRATION",
 		);
 	}
+	conn.execute_batch("DROP TABLE IF EXISTS channel_patterns;")?;
 	conn.execute_batch("DELETE FROM moderators WHERE rowid NOT IN (SELECT MIN(rowid) FROM moderators GROUP BY user_id, guild_id);
 	CREATE UNIQUE INDEX IF NOT EXISTS idx_global_moderator ON moderators(user_id) WHERE guild_id IS NULL;
 	CREATE TABLE IF NOT EXISTS delivered_posts (

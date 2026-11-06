@@ -87,69 +87,7 @@ impl Database {
 		Ok(count > 0)
 	}
 
-	pub fn add_channel_pattern(
-		&self,
-		guild_id: i64,
-		channel_id: i64,
-		pattern_name: &str,
-	) -> Result<()> {
-		anyhow::ensure!(
-			self.get_server_tags(guild_id)?
-				.iter()
-				.any(|tag| tag == pattern_name),
-			"channel blacklist entries must be enabled server tags"
-		);
-		self.connection()
-			.execute(
-				"INSERT OR IGNORE INTO channel_patterns (guild_id, channel_id, pattern_name)
-                 VALUES (?1, ?2, ?3)",
-				params![guild_id, channel_id, pattern_name],
-			)
-			.context("failed to add channel pattern")?;
-		Ok(())
-	}
-
-	pub fn remove_channel_pattern(
-		&self,
-		guild_id: i64,
-		channel_id: i64,
-		pattern_name: &str,
-	) -> Result<()> {
-		self.connection()
-			.execute(
-				"DELETE FROM channel_patterns
-                 WHERE guild_id = ?1 AND channel_id = ?2 AND pattern_name = ?3",
-				params![guild_id, channel_id, pattern_name],
-			)
-			.context("failed to remove channel pattern")?;
-		Ok(())
-	}
-
-	pub fn get_channel_patterns(&self, guild_id: i64, channel_id: i64) -> Result<Vec<String>> {
-		let conn = self.connection();
-		let mut stmt = conn
-			.prepare(
-				"SELECT pattern_name FROM channel_patterns
-                 WHERE guild_id = ?1 AND channel_id = ?2
-                 ORDER BY pattern_name",
-			)
-			.context("failed to prepare get_channel_patterns query")?;
-		let rows = stmt
-			.query_map(params![guild_id, channel_id], |row| row.get::<_, String>(0))
-			.context("failed to query channel patterns")?;
-		let mut names = Vec::new();
-		for row in rows {
-			names.push(row.context("failed to read pattern name")?);
-		}
-		Ok(names)
-	}
 	pub fn remove_channel(&self, guild_id: i64, channel_id: i64) -> Result<()> {
-		self.connection()
-			.execute(
-				"DELETE FROM channel_patterns WHERE guild_id = ?1 AND channel_id = ?2",
-				params![guild_id, channel_id],
-			)
-			.context("failed to remove channel patterns")?;
 		self.connection()
 			.execute(
 				"DELETE FROM channels WHERE guild_id = ?1 AND channel_id = ?2",

@@ -202,7 +202,7 @@ fn server_tag_whitelist_management() {
 	let db = open_test_db();
 	db.add_server(1, "test").unwrap();
 	db.add_booru(&test_booru("demo")).unwrap();
-	for tag in ["tag_a", "tag_b"] {
+	for tag in ["tag-a", "tag-b"] {
 		db.add_tag_pattern(tag, "demo", &["solo".into()], &[])
 			.unwrap();
 	}
@@ -210,15 +210,15 @@ fn server_tag_whitelist_management() {
 	assert!(db.get_server_tags(1).unwrap().is_empty());
 	assert_eq!(db.count_server_tag_whitelist().unwrap(), 0);
 
-	db.add_server_tag(1, "tag_a").unwrap();
-	db.add_server_tag(1, "tag_b").unwrap();
+	db.add_server_tag(1, "tag-a").unwrap();
+	db.add_server_tag(1, "tag-b").unwrap();
 	assert_eq!(db.count_server_tag_whitelist().unwrap(), 2);
 
 	let tags = db.get_server_tags(1).unwrap();
-	assert_eq!(tags, vec!["tag_a".to_string(), "tag_b".to_string()]);
+	assert_eq!(tags, vec!["tag-a".to_string(), "tag-b".to_string()]);
 
-	db.remove_server_tag(1, "tag_a").unwrap();
-	assert_eq!(db.get_server_tags(1).unwrap(), vec!["tag_b".to_string()]);
+	db.remove_server_tag(1, "tag-a").unwrap();
+	assert_eq!(db.get_server_tags(1).unwrap(), vec!["tag-b".to_string()]);
 }
 
 #[test]
@@ -264,11 +264,10 @@ fn cleanup_handles_orphan_parent_and_child_rows_in_one_pass() {
 			"PRAGMA foreign_keys=OFF;
 	INSERT INTO channels(guild_id,channel_id) VALUES(99,10);
 	INSERT INTO server_tag_whitelist VALUES(99,'demo');
-	INSERT INTO channel_patterns VALUES(99,10,'demo');
 	PRAGMA foreign_keys=ON;",
 		)
 		.unwrap();
-	assert_eq!(db.check_and_clean().unwrap(), 3);
+	assert_eq!(db.check_and_clean().unwrap(), 2);
 	assert!(!db.has_channel(99, 10).unwrap());
 }
 
@@ -304,7 +303,7 @@ fn normalization_collisions_and_invalid_provider_values_are_rejected() {
 	assert!(db.add_booru(&row).is_err());
 	row.max_tags = 9;
 	db.add_booru(&row).unwrap();
-	db.add_tag_pattern("blue archive", "demo", &["blue_archive".into()], &[])
+	db.add_tag_pattern("blue-archive", "demo", &["blue_archive".into()], &[])
 		.unwrap();
 	assert!(
 		db.add_tag_pattern("blue_archive", "demo", &["solo".into()], &[])
@@ -373,14 +372,11 @@ fn channel_update_preserves_its_blacklist_and_normalizes_tags() {
 		banned_tags: vec![" Blocked ".into()],
 	};
 	db.set_channel_config(&config).unwrap();
-	db.add_channel_pattern(1, 10, "solo").unwrap();
 	config.language = Some("fr".into());
 	db.set_channel_config(&config).unwrap();
-	assert_eq!(db.get_channel_patterns(1, 10).unwrap(), vec!["solo"]);
 	assert_eq!(
 		db.get_channel_config(1, 10).unwrap().unwrap().banned_tags,
 		vec!["blocked"]
 	);
 	db.remove_server_tag(1, "solo").unwrap();
-	assert!(db.get_channel_patterns(1, 10).unwrap().is_empty());
 }
