@@ -154,8 +154,8 @@ bundle automatically. On other deployments, ensure system CA certificates exist;
    tags are remembered. You can also test defined patterns from **Tag patterns**.
 6. Add channels, define shared tag patterns, then enable those names under **Server
    tags**. No tag-generated commands are enabled by an empty server whitelist.
-7. Optionally assign guild moderators. They can manage only their guild's channels
-   and enabled server tags. Shared providers, shared patterns, settings, server
+7. Optionally assign guild moderators. They can manage only their guild's channels,
+   enabled server tags, and shared tag patterns. Shared providers, settings, server
    validation and moderator assignment remain administrator-only.
 
 The panel is ephemeral, paginated and user/guild-bound. Writes require confirmation.

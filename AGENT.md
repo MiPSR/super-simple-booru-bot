@@ -27,8 +27,8 @@ There is intentionally no NSFW flag or content-rating behavior.
 - `admin_user_id` is the sole global administrator.
 - Moderators are assigned to a specific guild. NULL/global legacy moderator rows
   do not grant access; new global moderator assignment is rejected.
-- Guild moderators manage only that guild's configured channels and server-tag
-  whitelist. Providers, shared patterns, global settings, server validation and
+- Guild moderators manage that guild's configured channels, server-tag whitelist,
+  and shared tag patterns. Providers, global settings, server validation and
   moderator assignment are administrator-only.
 - The private administration panel binds opaque action IDs to a user, guild and
   expiration. Re-authorize **every** button and modal, including confirmations.

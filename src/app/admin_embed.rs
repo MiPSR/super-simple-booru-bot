@@ -120,7 +120,11 @@ fn check_scope(
 		return Ok(());
 	}
 	ensure!(
-		guild.is_some() && matches!(category, "main" | "channels" | "server_tags" | "reload"),
+		guild.is_some()
+			&& matches!(
+				category,
+				"main" | "channels" | "server_tags" | "reload" | "patterns"
+			),
 		"Only the administrator can manage shared configuration."
 	);
 	ensure!(
@@ -173,7 +177,7 @@ pub(crate) async fn handle_administrate_embed(
 		return Ok(());
 	}
 	command.defer_ephemeral(&ctx.http).await?;
-	let (embed, rows) = page(handler, user, guild, &action)?;
+	let (embed, rows) = page(handler, ctx, user, guild, &action).await?;
 	command
 		.edit_response(
 			&ctx.http,
@@ -247,7 +251,7 @@ pub(crate) async fn handle_component_interaction(
 			.await?;
 		}
 		Stage::Page | Stage::Select => {
-			let (embed, rows) = page(handler, user, guild, &action)?;
+			let (embed, rows) = page(handler, ctx, user, guild, &action).await?;
 			v.create_response(
 				&ctx.http,
 				CreateInteractionResponse::UpdateMessage(
@@ -310,10 +314,12 @@ pub(crate) async fn handle_component_interaction(
 			};
 			let (embed, rows) = page(
 				handler,
+				ctx,
 				user,
 				guild,
 				&Action::new(&action.category, "", Stage::Page),
-			)?;
+			)
+			.await?;
 			v.edit_response(
 				&ctx.http,
 				EditInteractionResponse::new()
@@ -502,8 +508,9 @@ fn confirmation(
 	)
 }
 
-fn page(
+async fn page(
 	handler: &Handler,
+	ctx: &Context,
 	user: u64,
 	guild: Option<i64>,
 	action: &Action,
@@ -522,7 +529,7 @@ fn page(
 			("servers", "Servers"),
 			("moderators", "Moderators"),
 		] {
-			if owner || matches!(category, "server_tags" | "channels") {
+			if owner || matches!(category, "server_tags" | "channels" | "patterns") {
 				buttons.push(button(
 					handler,
 					user,
@@ -546,6 +553,53 @@ fn page(
 		let items = {
 			let db = handler.db.lock().expect("db mutex poisoned");
 			items(&db, guild, owner, &action.category)?
+		};
+		let items = if action.category == "moderators" {
+			let mut resolved = Vec::with_capacity(items.len());
+			for (id, _label) in items {
+				let parts: Vec<&str> = id.split('/').collect();
+				let (g, u) = if parts.len() == 2 {
+					(parts[0].parse::<i64>().ok(), parts[1].parse::<i64>().ok())
+				} else {
+					(None, None)
+				};
+				let user_name = if let Some(user_id) = u {
+					match serenity::all::UserId::new(user_id as u64)
+						.to_user(&ctx.http)
+						.await
+					{
+						Ok(user) => user.global_name.unwrap_or_else(|| user.name.clone()),
+						Err(_) => format!("User {user_id}"),
+					}
+				} else {
+					"Unknown user".to_string()
+				};
+				let guild_name = if let Some(guild_id) = g {
+					match ctx
+						.http
+						.get_guild(serenity::all::GuildId::new(guild_id as u64))
+						.await
+					{
+						Ok(guild) => guild.name,
+						Err(_) => format!("Guild {guild_id}"),
+					}
+				} else {
+					"Unknown guild".to_string()
+				};
+				resolved.push((
+					id,
+					format!(
+						"{} ({}) / {} ({})",
+						user_name,
+						u.unwrap_or(0),
+						guild_name,
+						g.unwrap_or(0)
+					),
+				));
+			}
+			resolved
+		} else {
+			items
 		};
 		let pages = items.len().div_ceil(PAGE_SIZE).max(1);
 		let page = action.page.min(pages - 1);
@@ -1158,6 +1212,7 @@ mod tests {
 		assert!(check_scope(false, true, Some(1), "channels", Some(1)).is_ok());
 		assert!(check_scope(false, true, Some(1), "channels", Some(2)).is_err());
 		assert!(check_scope(false, true, Some(1), "boorus", None).is_err());
+		assert!(check_scope(false, true, Some(1), "patterns", None).is_ok());
 		assert!(check_scope(false, false, Some(1), "main", None).is_err());
 	}
 	#[test]
