@@ -69,6 +69,219 @@ impl Database {
 		let tx = self.connection().unchecked_transaction()?;
 		let conn = &tx;
 
+		// Normalize legacy provider names at startup instead of failing.
+		{
+			use std::collections::HashSet;
+			let boorus = self.get_all_boorus()?;
+			let mut used: HashSet<String> = boorus.iter().map(|b| b.name.clone()).collect();
+			let fixed: HashSet<String> = boorus
+				.iter()
+				.filter_map(|b| {
+					let n = crate::app::discord_name_component(&b.name);
+					if n == b.name { Some(n) } else { None }
+				})
+				.collect();
+			for booru in &boorus {
+				let normalized = crate::app::discord_name_component(&booru.name);
+				let desired = if normalized.is_empty() {
+					format!("provider-{}", booru.id)
+				} else {
+					normalized
+				};
+				if desired == booru.name {
+					continue;
+				}
+				let mut final_name = desired.clone();
+				if fixed.contains(&desired) || used.contains(&final_name) {
+					let mut i = 2usize;
+					loop {
+						let candidate = format!("{desired}-{i}");
+						if !fixed.contains(&candidate) && !used.contains(&candidate) {
+							final_name = candidate;
+							break;
+						}
+						i += 1;
+					}
+				}
+				conn.execute(
+					"UPDATE boorus SET name = ?1 WHERE id = ?2",
+					rusqlite::params![final_name, booru.id],
+				)
+				.context("failed to normalize provider name")?;
+				conn.execute(
+					"UPDATE art_history SET booru_name = ?1 WHERE booru_name = ?2",
+					rusqlite::params![final_name, booru.name],
+				)
+				.context("failed to normalize provider history names")?;
+				used.remove(&booru.name);
+				used.insert(final_name);
+				cleaned += 1;
+			}
+		}
+
+		// Normalize legacy tag pattern names at startup instead of failing.
+		{
+			use std::collections::HashSet;
+			let patterns = self.get_tag_patterns(None)?;
+			let mut original_names: Vec<String> = patterns.iter().map(|p| p.name.clone()).collect();
+			original_names.sort();
+			original_names.dedup();
+			let mut used: HashSet<String> = original_names.iter().cloned().collect();
+			let fixed: HashSet<String> = original_names
+				.iter()
+				.filter(|name| **name == crate::app::discord_name_component(name))
+				.cloned()
+				.collect();
+			for old_name in &original_names {
+				let normalized = crate::app::discord_name_component(old_name);
+				let desired = if normalized.is_empty() {
+					"pattern".to_string()
+				} else {
+					normalized
+				};
+				if desired == *old_name {
+					continue;
+				}
+				let mut final_name = desired.clone();
+				if fixed.contains(&desired) || used.contains(&final_name) {
+					let mut i = 2usize;
+					loop {
+						let candidate = format!("{desired}-{i}");
+						if !fixed.contains(&candidate) && !used.contains(&candidate) {
+							final_name = candidate;
+							break;
+						}
+						i += 1;
+					}
+				}
+				conn.execute(
+					"UPDATE tag_patterns SET name = ?1 WHERE name = ?2",
+					rusqlite::params![final_name, old_name],
+				)
+				.context("failed to normalize tag pattern name")?;
+				conn.execute(
+					"UPDATE server_tag_whitelist SET tag_name = ?1 WHERE tag_name = ?2",
+					rusqlite::params![final_name, old_name],
+				)
+				.context("failed to normalize server tag names")?;
+				used.remove(old_name);
+				used.insert(final_name);
+				cleaned += 1;
+			}
+		}
+
+
+
+		// Normalize legacy provider names at startup instead of failing.
+		{
+			use std::collections::HashSet;
+			let boorus = self.get_all_boorus()?;
+			let mut used: HashSet<String> = boorus.iter().map(|b| b.name.clone()).collect();
+			let fixed: HashSet<String> = boorus
+				.iter()
+				.filter_map(|b| {
+					let n = crate::app::discord_name_component(&b.name);
+					if n == b.name { Some(n) } else { None }
+				})
+				.collect();
+			for booru in &boorus {
+				let normalized = crate::app::discord_name_component(&booru.name);
+				let desired = if normalized.is_empty() {
+					format!("provider-{}", booru.id)
+				} else {
+					normalized
+				};
+				if desired == booru.name {
+					continue;
+				}
+				let mut final_name = desired.clone();
+				if fixed.contains(&desired) || used.contains(&final_name) {
+					let mut i = 2usize;
+					loop {
+						let candidate = format!("{desired}-{i}");
+						if !fixed.contains(&candidate) && !used.contains(&candidate) {
+							final_name = candidate;
+							break;
+						}
+						i += 1;
+					}
+				}
+				conn.execute(
+					"UPDATE boorus SET name = ?1 WHERE id = ?2",
+					rusqlite::params![final_name, booru.id],
+				)
+				.context("failed to normalize provider name")?;
+				conn.execute(
+					"UPDATE art_history SET booru_name = ?1 WHERE booru_name = ?2",
+					rusqlite::params![final_name, booru.name],
+				)
+				.context("failed to normalize provider history names")?;
+				used.remove(&booru.name);
+				used.insert(final_name);
+				cleaned += 1;
+			}
+		}
+
+		// Normalize legacy tag pattern names at startup instead of failing.
+		{
+			use std::collections::HashSet;
+			let patterns = self.get_tag_patterns(None)?;
+			let mut original_names: Vec<String> = patterns.iter().map(|p| p.name.clone()).collect();
+			original_names.sort();
+			original_names.dedup();
+			let mut used: HashSet<String> = original_names.iter().cloned().collect();
+			let fixed: HashSet<String> = original_names
+				.iter()
+				.filter(|name| **name == crate::app::discord_name_component(name))
+				.cloned()
+				.collect();
+			for old_name in &original_names {
+				let normalized = crate::app::discord_name_component(old_name);
+				let desired = if normalized.is_empty() {
+					"pattern".to_string()
+				} else {
+					normalized
+				};
+				if desired == *old_name {
+					continue;
+				}
+				let mut final_name = desired.clone();
+				if fixed.contains(&desired) || used.contains(&final_name) {
+					let mut i = 2usize;
+					loop {
+						let candidate = format!("{desired}-{i}");
+						if !fixed.contains(&candidate) && !used.contains(&candidate) {
+							final_name = candidate;
+							break;
+						}
+						i += 1;
+					}
+				}
+				conn.execute(
+					"UPDATE tag_patterns SET name = ?1 WHERE name = ?2",
+					rusqlite::params![final_name, old_name],
+				)
+				.context("failed to normalize tag pattern name")?;
+				conn.execute(
+					"UPDATE server_tag_whitelist SET tag_name = ?1 WHERE tag_name = ?2",
+					rusqlite::params![final_name, old_name],
+				)
+				.context("failed to normalize server tag names")?;
+				used.remove(old_name);
+				used.insert(final_name);
+				cleaned += 1;
+			}
+		}
+
+		// Remove server tags that no longer correspond to a pattern.
+		cleaned += conn
+			.execute(
+				"DELETE FROM server_tag_whitelist
+				 WHERE tag_name NOT IN (SELECT DISTINCT name FROM tag_patterns)",
+				[],
+			)
+			.context("failed to clean orphan server tags")?;
+
 		cleaned += conn
 			.execute(
 				"DELETE FROM tag_pattern_entries

@@ -1079,24 +1079,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "63b8176103e19a2643978565ca18b50549f6101881c443590420e4dc998a3c69"
 
 [[package]]
-name = "super-simple-booru-bot"
-version = "26.1.1-alpha"
-dependencies = [
- "anyhow",
- "chrono",
- "image",
- "rand 0.10.3",
- "reqwest 0.13.5",
- "rusqlite",
- "serde",
- "serde_json",
- "serenity",
- "tokio",
- "toml",
- "urlencoding",
-]
-
-[[package]]
 name = "reqwest"
 version = "0.12.28"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1442,6 +1424,24 @@ name = "stable_deref_trait"
 version = "1.2.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "6ce2be8dc25455e1f91df71bfa12ad37d7af1092ae736f3a6cd0e37bc7810596"
+
+[[package]]
+name = "super-simple-booru-bot"
+version = "26.1.1-alpha"
+dependencies = [
+ "anyhow",
+ "chrono",
+ "image",
+ "rand 0.10.3",
+ "reqwest 0.13.5",
+ "rusqlite",
+ "serde",
+ "serde_json",
+ "serenity",
+ "tokio",
+ "toml",
+ "urlencoding",
+]
 
 [[package]]
 name = "syn"

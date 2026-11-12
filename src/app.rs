@@ -57,6 +57,7 @@ pub struct Handler {
 	last_command_sync: Mutex<Instant>,
 	delivery_locks: Mutex<HashMap<i64, Weak<tokio::sync::Mutex<()>>>>,
 	discord_token: String,
+	startup_error: Option<String>,
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -271,7 +272,7 @@ impl Handler {
 		}
 		let lang =
 			{ crate::settings::get(&self.db.lock().expect("db mutex poisoned"), "app_lang")? };
-		register_commands_for_servers(http, Arc::clone(&self.db), &I18n::load(&lang)?).await?;
+		register_commands_for_servers(http, Arc::clone(&self.db), &I18n::load(&lang)?, false).await?;
 		*self.last_command_sync.lock().expect("sync mutex poisoned") = Instant::now();
 		Ok(())
 	}
@@ -526,6 +527,9 @@ fn build_commands(
 	}
 
 	commands.push(
+		CreateCommand::new("status").description("Show current bot status (administrators and moderators)"),
+	);
+	commands.push(
 		CreateCommand::new("administrate").description(i18n.administrate_command_description()),
 	);
 	commands.push(
@@ -581,14 +585,14 @@ async fn register_commands_for_servers(
 	http: &serenity::http::Http,
 	db: Arc<Mutex<Database>>,
 	i18n: &I18n,
+	degraded: bool,
 ) -> Result<()> {
 	let guilds = connected_guilds(http).await?;
-	{
+	if !degraded {
 		let db = db.lock().expect("db mutex poisoned");
 		for guild in &guilds {
 			db.add_server(guild.id.get() as i64, &guild.name)?;
 		}
-
 		let validated_servers = db.get_validated_servers()?;
 		cli::init_status(
 			guilds.len(),
@@ -596,11 +600,15 @@ async fn register_commands_for_servers(
 			db.count_channels()?,
 			db.count_server_tag_whitelist()?,
 		);
+	} else {
+		cli::init_status(guilds.len(), 0, 0, 0);
 	}
 
 	let mut sets = Vec::new();
 	for guild in &guilds {
-		let commands = {
+		let commands = if degraded {
+			vec![status_command()]
+		} else {
 			let db = db.lock().expect("db mutex poisoned");
 			let guild_id = guild.id.get() as i64;
 			let server_validated = db
@@ -610,7 +618,6 @@ async fn register_commands_for_servers(
 		};
 		sets.push((guild.id, commands));
 	}
-	// Validate every replacement before deleting any old global or guild command.
 	serenity::all::Command::set_global_commands(http, Vec::new()).await?;
 	for (guild, commands) in sets {
 		guild.set_commands(http, commands).await?;
@@ -618,6 +625,20 @@ async fn register_commands_for_servers(
 	cli::commands_pushed();
 	cli::server_ready();
 	Ok(())
+}
+
+async fn register_status_commands(http: &serenity::http::Http) -> Result<()> {
+	let guilds = connected_guilds(http).await?;
+	for guild in &guilds {
+		guild.id.set_commands(http, vec![status_command()]).await?;
+	}
+	serenity::all::Command::set_global_commands(http, Vec::new()).await?;
+	Ok(())
+}
+
+fn status_command() -> serenity::all::CreateCommand {
+	serenity::all::CreateCommand::new("status")
+		.description("Show current bot status (administrators and moderators)")
 }
 
 fn load_settings_from_db(
@@ -684,24 +705,62 @@ async fn run_bot(db_path: &str, secrets: &SecretConfig, is_reload: bool) -> Resu
 		cli::bot_loading();
 	}
 
+	let mut startup_error: Option<String> = None;
+	let first_db = match Database::open(db_path, 1000) {
+		Ok(db) => db,
+		Err(err) => {
+			cli::error(&format!("{err:#}"), "ERROR");
+			startup_error = Some(format!("{err:#}"));
+			Database::open(":memory:", 1000).context("failed to open fallback database")?
+		}
+	};
+	cli::checking_db();
+	match first_db.check_and_clean() {
+		Ok(cleaned) => {
+			if cleaned > 0 {
+				cli::db_cleaned(cleaned);
+			}
+		}
+		Err(err) => {
+			cli::error(&format!("{err:#}"), "ERROR");
+			startup_error.get_or_insert_with(|| format!("{err:#}"));
+		}
+	}
+
 	let (
 		language,
 		api_rate_pace,
-		_fetch_retry_limit,
+		_history_limit,
 		history_limit,
 		_tag_blacklist,
 		runtime_values,
-	) = {
-		let db = Database::open(db_path, 1000)?;
-		cli::checking_db();
-		let cleaned = db.check_and_clean()?;
-		if cleaned > 0 {
-			cli::db_cleaned(cleaned);
+	) = match load_settings_from_db(&first_db, secrets) {
+		Ok((language, api_rate_pace, _fetch_retry_limit, history_limit, tag_blacklist, runtime_values)) => {
+			(language, api_rate_pace, _fetch_retry_limit, history_limit, tag_blacklist, runtime_values)
 		}
-		load_settings_from_db(&db, secrets)?
+		Err(err) => {
+			cli::error(&format!("{err:#}"), "ERROR");
+			startup_error.get_or_insert_with(|| format!("{err:#}"));
+			(
+				"en".to_string(),
+				Duration::from_millis(0),
+				3usize,
+				1000usize,
+				Vec::new(),
+				RuntimeValues {
+					secrets: HashMap::from([("discord_token".to_string(), secrets.discord_token.clone())]),
+					settings: HashMap::new(),
+					custom: HashMap::new(),
+				},
+			)
+		}
 	};
 
-	let db = Database::open(db_path, history_limit)?;
+	let db = Database::open(db_path, history_limit).unwrap_or_else(|err| {
+		cli::error(&format!("{err:#}"), "ERROR");
+		startup_error.get_or_insert_with(|| format!("{err:#}"));
+		Database::open(":memory:", history_limit).expect("failed to open fallback database")
+	});
 	let db = Arc::new(Mutex::new(db));
 	let discord_pace = {
 		crate::settings::number(
@@ -739,6 +798,7 @@ async fn run_bot(db_path: &str, secrets: &SecretConfig, is_reload: bool) -> Resu
 		last_command_sync: Mutex::new(Instant::now()),
 		delivery_locks: Mutex::new(HashMap::new()),
 		discord_token: secrets.discord_token.clone(),
+		startup_error: startup_error.clone(),
 	};
 
 	let application_id = ApplicationId::new(secrets.discord_application_id);
@@ -746,7 +806,13 @@ async fn run_bot(db_path: &str, secrets: &SecretConfig, is_reload: bool) -> Resu
 	http.default_allowed_mentions = Some(serenity::all::CreateAllowedMentions::new());
 	http.set_application_id(application_id);
 
-	register_commands_for_servers(&http, Arc::clone(&handler.db), &i18n).await?;
+	let degraded = handler.startup_error.is_some();
+	if let Err(err) = register_commands_for_servers(&http, Arc::clone(&handler.db), &i18n, degraded).await {
+		cli::error(&format!("{err:#}"), "ERROR");
+		if let Err(err2) = register_status_commands(&http).await {
+			cli::error(&format!("{err2:#}"), "ERROR");
+		}
+	}
 
 	let intents = GatewayIntents::GUILDS;
 	let mut client = serenity::client::ClientBuilder::new_with_http(http, intents)
@@ -849,7 +915,7 @@ mod tests {
 
 	#[test]
 	fn builds_custom_command_name_with_special_chars() {
-		assert_eq!(custom_command_name("test.booru!"), "test-booru-custom");
+		assert_eq!(custom_command_name("test.booru!"), "test0booru0-custom");
 	}
 
 	#[test]

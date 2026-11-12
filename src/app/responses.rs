@@ -17,7 +17,13 @@ pub(crate) fn discord_name_component(value: &str) -> String {
 	let mut last_was_hyphen = false;
 
 	for ch in value.chars().flat_map(|ch| ch.to_lowercase()) {
-		let mapped = if ch.is_ascii_alphanumeric() { ch } else { '-' };
+		let mapped = if ch.is_ascii_alphanumeric() {
+			ch
+		} else if ch == ' ' || ch == '-' {
+			'-'
+		} else {
+			'0'
+		};
 		if mapped == '-' {
 			if last_was_hyphen {
 				continue;

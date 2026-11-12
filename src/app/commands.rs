@@ -261,6 +261,40 @@ async fn handle_command(
 	let name = command.data.name.as_str();
 	let user = command.user.id.get();
 	cli::app_input(guild, channel, user as i64, name);
+	if name == "status" {
+		guard(
+			handler.can_administer(user, guild)?,
+			"status is restricted to the administrator and guild moderators",
+		)?;
+		command.defer_ephemeral(&ctx.http).await?;
+		let mut text = if handler.startup_error.is_some() {
+			"Status: degraded".to_string()
+		} else {
+			"Status: OK".to_string()
+		};
+		if let Some(err) = &handler.startup_error {
+			let short: String = err.chars().take(1500).collect();
+			text.push_str(&format!("\nStartup error: {}", short));
+		}
+		if let Ok(db) = handler.db.lock() {
+			text.push_str(&format!(
+				"\nProviders: {}",
+				db.get_all_boorus().map(|v| v.len()).unwrap_or(0)
+			));
+			text.push_str(&format!(
+				"\nValidated servers: {}",
+				db.get_validated_servers().map(|v| v.len()).unwrap_or(0)
+			));
+			text.push_str(&format!(
+				"\nConfigured channels: {}",
+				db.count_channels().unwrap_or(0)
+			));
+		}
+		command
+			.edit_response(&ctx.http, EditInteractionResponse::new().content(text))
+			.await?;
+		return Ok(());
+	}
 	if name == "administrate" {
 		super::admin_embed::handle_administrate_embed(handler, command, ctx, user as i64).await?;
 		return handler.reconcile_commands(&ctx.http, false).await;
