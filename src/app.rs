@@ -1,14 +1,16 @@
 use std::{
 	collections::HashMap,
 	env,
+	ops::Deref,
 	sync::{
-		Arc, Mutex, Weak,
+		Arc, Mutex,
 		atomic::{AtomicBool, Ordering},
 	},
 	time::{Duration, Instant},
 };
 
 use anyhow::{Context as _, Result};
+use prefix::PrefixContext as _;
 use serenity::{
 	all::{
 		ApplicationId, CommandInteraction, CommandOptionType, Context, CreateCommand,
@@ -32,32 +34,44 @@ use crate::{
 mod admin;
 mod admin_embed;
 mod commands;
+mod commands_core;
+pub(crate) mod core;
+mod discord_prefix;
+mod fluxer;
 pub(crate) mod post_cache;
+mod prefix;
 mod responses;
 mod secrets;
 
 pub(crate) use commands::JobTracker;
+pub(crate) use core::Core;
 pub(crate) use post_cache::PostCache;
 pub(crate) use responses::{custom_command_name, discord_name_component};
-pub(crate) use secrets::SecretConfig;
+pub(crate) use secrets::DiscordSecret;
 
-pub struct Handler {
-	db: Arc<Mutex<Database>>,
-	booru: BooruClient,
-	pacer: ApiPacer,
-	i18n: Arc<I18n>,
-	i18ns: HashMap<String, I18n>,
-	admin_user_id: u64,
-	jobs: Arc<JobTracker>,
-	reload_requested: Arc<AtomicBool>,
-	reload_notify: Arc<Notify>,
-	cached_posts: Arc<PostCache>,
+pub(crate) struct Handler {
+	core: Arc<Core>,
 	admin_state: admin_embed::PanelStore,
 	command_sync: tokio::sync::Mutex<()>,
 	last_command_sync: Mutex<Instant>,
-	delivery_locks: Mutex<HashMap<i64, Weak<tokio::sync::Mutex<()>>>>,
-	discord_token: String,
-	startup_error: Option<String>,
+}
+
+impl Deref for Handler {
+	type Target = Core;
+
+	fn deref(&self) -> &Self::Target {
+		&self.core
+	}
+}
+
+impl Handler {
+	pub(crate) fn core(&self) -> &Arc<Core> {
+		&self.core
+	}
+
+	pub(crate) fn delivery_lock(&self, channel: i64) -> Arc<tokio::sync::Mutex<()>> {
+		core::global_delivery_lock(channel)
+	}
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -181,70 +195,43 @@ impl EventHandler for Handler {
 	async fn interaction_create(&self, ctx: Context, interaction: Interaction) {
 		commands::handle_interaction(self, &ctx, interaction).await;
 	}
+
+	async fn message(&self, ctx: Context, message: serenity::model::channel::Message) {
+		if message.author.bot || !self.prefix_enabled() {
+			return;
+		}
+		let prefix = self.command_prefix();
+		let Some(command) = prefix::parse(&message.content, &prefix) else {
+			return;
+		};
+		let mut limit = self.setting_number("max_concurrent_jobs").unwrap_or(4) as usize;
+		if matches!(command.name.as_str(), "reload") {
+			limit = limit.saturating_add(1);
+		}
+		let Some(_job) = self.jobs.try_start(limit) else {
+			let _ = message
+				.channel_id
+				.say(
+					&ctx.http,
+					"The bot is busy or reloading. Please try again shortly.",
+				)
+				.await;
+			return;
+		};
+		let responder = discord_prefix::DiscordPrefix::new(self, &ctx, &message);
+		if let Err(err) = prefix::execute(&responder, command).await {
+			cli::error(&format!("{err:#}"), "ERROR");
+			let _ = responder
+				.reply(prefix::PrefixReply::text(format!(
+					"Operation failed: {}",
+					truncate_for_dm(&err.to_string(), 1500)
+				)))
+				.await;
+		}
+	}
 }
 
 impl Handler {
-	pub(crate) fn can_administer(&self, user: u64, guild: Option<i64>) -> Result<bool> {
-		Ok(user == self.admin_user_id
-			|| self
-				.db
-				.lock()
-				.expect("db mutex poisoned")
-				.is_moderator(user as i64, guild)?)
-	}
-	pub(crate) fn setting_number(&self, key: &str) -> Result<u64> {
-		crate::settings::number(&self.db.lock().expect("db mutex poisoned"), key)
-	}
-	pub(crate) fn discord_pacer(&self) -> Result<ApiPacer> {
-		Ok(self.pacer.with_interval(Duration::from_millis(
-			self.setting_number("discord_api_pace_ms")?,
-		)))
-	}
-	pub(crate) fn fetch_client(&self) -> Result<BooruClient> {
-		let db = self.db.lock().expect("db mutex poisoned");
-		let mut runtime = RuntimeValues {
-			secrets: HashMap::from([("discord_token".into(), self.discord_token.clone())]),
-			settings: db.get_all_settings()?.into_iter().collect(),
-			custom: HashMap::new(),
-		};
-		for (key, _) in crate::settings::DEFAULTS {
-			runtime
-				.settings
-				.insert(key.to_string(), crate::settings::get(&db, key)?);
-		}
-		for param in db.get_all_booru_custom_parameters()? {
-			runtime
-				.custom
-				.entry(param.booru_name)
-				.or_default()
-				.insert(param.key, param.value);
-		}
-		Ok(self.booru.with_runtime(runtime))
-	}
-	pub(crate) fn blacklist(&self, guild: Option<i64>, channel: i64) -> Result<Vec<String>> {
-		let db = self.db.lock().expect("db mutex poisoned");
-		let mut tags = crate::settings::get(&db, "booru_tag_blacklist")?
-			.split(',')
-			.map(|t| t.trim().to_ascii_lowercase())
-			.filter(|t| !t.is_empty())
-			.collect::<Vec<_>>();
-		if let Some(guild) = guild
-			&& let Some(config) = db.get_channel_config(guild, channel)?
-		{
-			tags.extend(config.banned_tags);
-		}
-		Ok(tags)
-	}
-	pub(crate) fn delivery_lock(&self, channel: i64) -> Arc<tokio::sync::Mutex<()>> {
-		let mut locks = self.delivery_locks.lock().expect("delivery mutex poisoned");
-		locks.retain(|_, value| value.strong_count() > 0);
-		if let Some(lock) = locks.get(&channel).and_then(Weak::upgrade) {
-			return lock;
-		}
-		let lock = Arc::new(tokio::sync::Mutex::new(()));
-		locks.insert(channel, Arc::downgrade(&lock));
-		lock
-	}
 	pub(crate) async fn reconcile_commands(
 		&self,
 		http: &serenity::http::Http,
@@ -272,28 +259,11 @@ impl Handler {
 		}
 		let lang =
 			{ crate::settings::get(&self.db.lock().expect("db mutex poisoned"), "app_lang")? };
-		register_commands_for_servers(http, Arc::clone(&self.db), &I18n::load(&lang)?, false).await?;
+		register_commands_for_servers(http, Arc::clone(&self.db), &I18n::load(&lang)?, false)
+			.await?;
 		*self.last_command_sync.lock().expect("sync mutex poisoned") = Instant::now();
 		Ok(())
 	}
-	pub(crate) fn channel_i18n(&self, guild_id: Option<i64>, channel_id: i64) -> I18n {
-		let Some(guild_id) = guild_id else {
-			return (*self.i18n).clone();
-		};
-
-		let db = self.db.lock().expect("db mutex poisoned");
-		if let Ok(Some(cfg)) = db.get_channel_config(guild_id, channel_id)
-			&& let Some(ref lang) = cfg.language
-			&& let Some(i18n) = self.i18ns.get(&lang.trim().to_ascii_lowercase())
-		{
-			return i18n.clone();
-		}
-		crate::settings::get(&db, "app_lang")
-			.ok()
-			.and_then(|lang| I18n::load(&lang).ok())
-			.unwrap_or_else(|| (*self.i18n).clone())
-	}
-
 	pub(crate) async fn respond(
 		&self,
 		http: &serenity::http::Http,
@@ -400,17 +370,6 @@ fn db_setting_usize(db: &Database, key: &str, default: usize) -> usize {
 
 fn db_setting_duration_ms(db: &Database, key: &str, default: u64) -> Duration {
 	Duration::from_millis(db_setting_u64(db, key, default))
-}
-
-fn db_setting_string_list(db: &Database, key: &str, default: &str) -> Vec<String> {
-	let raw = db_setting_string(db, key, default);
-	if raw.is_empty() {
-		return Vec::new();
-	}
-	raw.split(',')
-		.map(|s| s.trim().to_ascii_lowercase())
-		.filter(|s| !s.is_empty())
-		.collect()
 }
 
 async fn connected_guilds(
@@ -527,7 +486,8 @@ fn build_commands(
 	}
 
 	commands.push(
-		CreateCommand::new("status").description("Show current bot status (administrators and moderators)"),
+		CreateCommand::new("status")
+			.description("Show current bot status (administrators and moderators)"),
 	);
 	commands.push(
 		CreateCommand::new("administrate").description(i18n.administrate_command_description()),
@@ -643,18 +603,20 @@ fn status_command() -> serenity::all::CreateCommand {
 
 fn load_settings_from_db(
 	db: &Database,
-	secrets: &SecretConfig,
-) -> Result<(String, Duration, usize, usize, Vec<String>, RuntimeValues)> {
+	token: &str,
+) -> Result<(String, Duration, usize, RuntimeValues)> {
 	for (key, value) in db.get_all_settings()? {
 		crate::settings::validate(&key, &value)?;
 	}
 	let language = db_setting_string(db, "app_lang", "en");
 	let api_rate_pace = db_setting_duration_ms(db, "api_rate_pace_ms", 0);
-	let fetch_retry_limit = db_setting_usize(db, "booru_fetch_retry_limit", 3);
 	let history_limit = db_setting_usize(db, "booru_source_link_history_limit", 1000);
-	let tag_blacklist = db_setting_string_list(db, "booru_tag_blacklist", "");
 
-	let secrets_map = HashMap::from([("discord_token".to_string(), secrets.discord_token.clone())]);
+	let secrets_map = HashMap::from([
+		("discord_token".to_string(), token.to_string()),
+		("fluxer_token".to_string(), token.to_string()),
+		("bot_token".to_string(), token.to_string()),
+	]);
 	let settings_map = db.get_all_settings()?.into_iter().collect();
 	let mut custom_map: HashMap<String, HashMap<String, String>> = HashMap::new();
 	for parameter in db.get_all_booru_custom_parameters()? {
@@ -670,48 +632,30 @@ fn load_settings_from_db(
 		custom: custom_map,
 	};
 
-	Ok((
-		language,
-		api_rate_pace,
-		fetch_retry_limit,
-		history_limit,
-		tag_blacklist,
-		runtime_values,
-	))
+	Ok((language, api_rate_pace, history_limit, runtime_values))
 }
 
-pub(crate) async fn run() -> Result<()> {
-	anyhow::ensure!(
-		env::args().len() == 1,
-		"no command-line options are supported; configure runtime paths with environment variables"
-	);
-	let db_path = env::var("SUPER_SIMPLE_BOORU_BOT_DB_PATH")
-		.unwrap_or_else(|_| "super-simple-booru-bot.sqlite3".into());
-
-	let mut is_reload = false;
-	loop {
-		let secrets = secrets::parse()?;
-		if !run_bot(&db_path, &secrets, is_reload).await? {
-			return Ok(());
-		}
-		is_reload = true;
-	}
+fn is_platform_mismatch(err: &anyhow::Error) -> bool {
+	format!("{err:#}").contains("belongs to platform")
 }
 
-async fn run_bot(db_path: &str, secrets: &SecretConfig, is_reload: bool) -> Result<bool> {
-	if is_reload {
-		cli::bot_reloading();
-	} else {
-		cli::bot_loading();
-	}
-
+pub(crate) fn prepare_core(
+	db_path: &str,
+	platform: crate::platform::PlatformKind,
+	token: &str,
+	admin_user_id: u64,
+) -> Result<(Arc<Core>, String)> {
 	let mut startup_error: Option<String> = None;
-	let first_db = match Database::open(db_path, 1000) {
+	let first_db = match Database::open(db_path, 1000, platform) {
 		Ok(db) => db,
 		Err(err) => {
+			if is_platform_mismatch(&err) {
+				return Err(err);
+			}
 			cli::error(&format!("{err:#}"), "ERROR");
 			startup_error = Some(format!("{err:#}"));
-			Database::open(":memory:", 1000).context("failed to open fallback database")?
+			Database::open(":memory:", 1000, platform)
+				.context("failed to open fallback database")?
 		}
 	};
 	cli::checking_db();
@@ -727,48 +671,47 @@ async fn run_bot(db_path: &str, secrets: &SecretConfig, is_reload: bool) -> Resu
 		}
 	}
 
-	let (
-		language,
-		api_rate_pace,
-		_history_limit,
-		history_limit,
-		_tag_blacklist,
-		runtime_values,
-	) = match load_settings_from_db(&first_db, secrets) {
-		Ok((language, api_rate_pace, _fetch_retry_limit, history_limit, tag_blacklist, runtime_values)) => {
-			(language, api_rate_pace, _fetch_retry_limit, history_limit, tag_blacklist, runtime_values)
-		}
+	let (language, api_rate_pace, history_limit, runtime_values) =
+		match load_settings_from_db(&first_db, token) {
+			Ok(values) => values,
+			Err(err) => {
+				cli::error(&format!("{err:#}"), "ERROR");
+				startup_error.get_or_insert_with(|| format!("{err:#}"));
+				(
+					"en".to_string(),
+					Duration::from_millis(0),
+					1000usize,
+					RuntimeValues {
+						secrets: HashMap::from([
+							("discord_token".to_string(), token.to_string()),
+							("fluxer_token".to_string(), token.to_string()),
+							("bot_token".to_string(), token.to_string()),
+						]),
+						settings: HashMap::new(),
+						custom: HashMap::new(),
+					},
+				)
+			}
+		};
+
+	let db = match Database::open(db_path, history_limit, platform) {
+		Ok(db) => db,
+		Err(err) if is_platform_mismatch(&err) => return Err(err),
 		Err(err) => {
 			cli::error(&format!("{err:#}"), "ERROR");
 			startup_error.get_or_insert_with(|| format!("{err:#}"));
-			(
-				"en".to_string(),
-				Duration::from_millis(0),
-				3usize,
-				1000usize,
-				Vec::new(),
-				RuntimeValues {
-					secrets: HashMap::from([("discord_token".to_string(), secrets.discord_token.clone())]),
-					settings: HashMap::new(),
-					custom: HashMap::new(),
-				},
-			)
+			Database::open(":memory:", history_limit, platform)
+				.expect("failed to open fallback database")
 		}
 	};
-
-	let db = Database::open(db_path, history_limit).unwrap_or_else(|err| {
-		cli::error(&format!("{err:#}"), "ERROR");
-		startup_error.get_or_insert_with(|| format!("{err:#}"));
-		Database::open(":memory:", history_limit).expect("failed to open fallback database")
-	});
 	let db = Arc::new(Mutex::new(db));
-	let discord_pace = {
+	let api_pace = {
 		crate::settings::number(
 			&db.lock().expect("db mutex poisoned"),
 			"discord_api_pace_ms",
 		)?
 	};
-	let pacer = ApiPacer::new(Duration::from_millis(discord_pace));
+	let pacer = ApiPacer::new(Duration::from_millis(api_pace));
 	let i18n = Arc::new(I18n::load(&language)?);
 	let mut i18ns = HashMap::new();
 	for lang in I18n::available_languages() {
@@ -782,46 +725,133 @@ async fn run_bot(db_path: &str, secrets: &SecretConfig, is_reload: bool) -> Resu
 	let reload_notify = Arc::new(Notify::new());
 	let cached_posts = Arc::new(PostCache::new(Arc::clone(&db)));
 
-	let handler = Handler {
-		db: Arc::clone(&db),
-		booru: BooruClient::new(ApiPacer::new(api_rate_pace), Arc::clone(&runtime_values))?,
+	let core = Arc::new(Core {
+		db,
+		booru: BooruClient::new(ApiPacer::new(api_rate_pace), runtime_values)?,
 		pacer,
-		i18n: Arc::clone(&i18n),
+		i18n,
 		i18ns,
-		admin_user_id: secrets.admin_user_id,
-		jobs: Arc::clone(&jobs),
-		reload_requested: Arc::clone(&reload_requested),
-		reload_notify: Arc::clone(&reload_notify),
-		cached_posts: Arc::clone(&cached_posts),
+		admin_user_id,
+		jobs,
+		reload_requested,
+		reload_notify,
+		cached_posts,
+		startup_error,
+		bot_token: token.to_string(),
+	});
+	Ok((core, language))
+}
+
+pub(crate) async fn run() -> Result<()> {
+	anyhow::ensure!(
+		env::args().len() == 1,
+		"no command-line options are supported; configure runtime paths with environment variables"
+	);
+	let discord_db = env::var("SUPER_SIMPLE_BOORU_BOT_DB_PATH")
+		.unwrap_or_else(|_| "super-simple-booru-bot.sqlite3".into());
+	let fluxer_db = env::var("SUPER_SIMPLE_BOORU_BOT_FLUXER_DB_PATH")
+		.unwrap_or_else(|_| "super-simple-booru-bot-fluxer.sqlite3".into());
+	let secrets = secrets::parse()?;
+
+	let mut tasks = tokio::task::JoinSet::new();
+	if secrets.discord.is_some() {
+		tasks.spawn(async move { run_discord_loop(discord_db).await });
+	}
+	if secrets.fluxer.is_some() {
+		tasks.spawn(async move { run_fluxer_loop(fluxer_db).await });
+	}
+	while let Some(result) = tasks.join_next().await {
+		match result {
+			Ok(Ok(())) => {}
+			Ok(Err(err)) => {
+				tasks.abort_all();
+				return Err(err);
+			}
+			Err(err) => {
+				tasks.abort_all();
+				return Err(anyhow::anyhow!("platform task failed: {err}"));
+			}
+		}
+	}
+	Ok(())
+}
+
+async fn run_discord_loop(db_path: String) -> Result<()> {
+	let mut is_reload = false;
+	loop {
+		let secrets = secrets::parse()?;
+		let Some(secret) = secrets.discord else {
+			return Ok(());
+		};
+		if !run_bot(&db_path, &secret, is_reload).await? {
+			return Ok(());
+		}
+		is_reload = true;
+	}
+}
+
+async fn run_fluxer_loop(db_path: String) -> Result<()> {
+	let mut is_reload = false;
+	loop {
+		let secrets = secrets::parse()?;
+		let Some(secret) = secrets.fluxer else {
+			return Ok(());
+		};
+		if !fluxer::run_bot(&db_path, &secret, is_reload).await? {
+			return Ok(());
+		}
+		is_reload = true;
+	}
+}
+
+async fn run_bot(db_path: &str, secret: &DiscordSecret, is_reload: bool) -> Result<bool> {
+	if is_reload {
+		cli::bot_reloading();
+	} else {
+		cli::bot_loading();
+	}
+
+	let (core, _language) = prepare_core(
+		db_path,
+		crate::platform::PlatformKind::Discord,
+		&secret.token,
+		secret.admin_user_id,
+	)?;
+
+	let handler = Handler {
+		core: Arc::clone(&core),
 		admin_state: admin_embed::PanelStore::default(),
 		command_sync: tokio::sync::Mutex::new(()),
 		last_command_sync: Mutex::new(Instant::now()),
-		delivery_locks: Mutex::new(HashMap::new()),
-		discord_token: secrets.discord_token.clone(),
-		startup_error: startup_error.clone(),
 	};
 
-	let application_id = ApplicationId::new(secrets.discord_application_id);
-	let mut http = serenity::http::Http::new(&secrets.discord_token);
+	let application_id = ApplicationId::new(secret.application_id);
+	let mut http = serenity::http::Http::new(&secret.token);
 	http.default_allowed_mentions = Some(serenity::all::CreateAllowedMentions::new());
 	http.set_application_id(application_id);
 
-	let degraded = handler.startup_error.is_some();
-	if let Err(err) = register_commands_for_servers(&http, Arc::clone(&handler.db), &i18n, degraded).await {
+	let degraded = core.startup_error.is_some();
+	if let Err(err) =
+		register_commands_for_servers(&http, Arc::clone(&core.db), &core.i18n, degraded).await
+	{
 		cli::error(&format!("{err:#}"), "ERROR");
 		if let Err(err2) = register_status_commands(&http).await {
 			cli::error(&format!("{err2:#}"), "ERROR");
 		}
 	}
 
-	let intents = GatewayIntents::GUILDS;
+	let intents = if core.prefix_enabled() {
+		GatewayIntents::GUILDS | GatewayIntents::GUILD_MESSAGES | GatewayIntents::MESSAGE_CONTENT
+	} else {
+		GatewayIntents::GUILDS
+	};
 	let mut client = serenity::client::ClientBuilder::new_with_http(http, intents)
 		.application_id(application_id)
 		.event_handler(handler)
 		.await
 		.context("failed to create discord client")?;
 
-	let cache_cleanup = Arc::clone(&cached_posts);
+	let cache_cleanup = Arc::clone(&core.cached_posts);
 	let cache_cleanup_task = tokio::spawn(async move {
 		let mut interval = tokio::time::interval(Duration::from_secs(600));
 		loop {
@@ -836,8 +866,8 @@ async fn run_bot(db_path: &str, secrets: &SecretConfig, is_reload: bool) -> Resu
 	let mut gateway = tokio::spawn(async move { client.start().await });
 	let stopped = tokio::select! {
 		result = &mut gateway => Some(result),
-		_ = reload_notify.notified() => None,
-		_ = shutdown_signal() => { jobs.begin_reload(); None },
+		_ = core.reload_notify.notified() => None,
+		_ = shutdown_signal() => { core.jobs.begin_reload(); None },
 	};
 	cache_cleanup_task.abort();
 	if let Some(result) = stopped {
@@ -846,13 +876,13 @@ async fn run_bot(db_path: &str, secrets: &SecretConfig, is_reload: bool) -> Resu
 			.context("gateway failed")?;
 		anyhow::bail!("gateway stopped unexpectedly");
 	}
-	if tokio::time::timeout(Duration::from_secs(30), jobs.wait_idle())
+	if tokio::time::timeout(Duration::from_secs(30), core.jobs.wait_idle())
 		.await
 		.is_err()
 	{
 		cli::error("active jobs exceeded shutdown deadline", "ERROR");
-		jobs.cancel_all();
-		tokio::time::timeout(Duration::from_secs(5), jobs.wait_idle())
+		core.jobs.cancel_all();
+		tokio::time::timeout(Duration::from_secs(5), core.jobs.wait_idle())
 			.await
 			.context("could not cancel active jobs safely; refusing to start a second client")?;
 	}
@@ -865,7 +895,7 @@ async fn run_bot(db_path: &str, secrets: &SecretConfig, is_reload: bool) -> Resu
 		.context("gateway did not finish shutdown")?
 		.context("gateway task panicked")??;
 	cli::unloaded_everything();
-	let reload = reload_requested.load(Ordering::Acquire);
+	let reload = core.reload_requested.load(Ordering::Acquire);
 	if reload {
 		cli::bot_reloaded();
 	}
@@ -906,6 +936,25 @@ mod tests {
 			output,
 			"1. <https://example.test/1>\n2. <https://example.test/2>"
 		);
+	}
+
+	#[test]
+	fn cross_platform_database_is_rejected() {
+		let path = std::env::temp_dir().join(format!(
+			"super-simple-booru-bot-cross-platform-{}",
+			post_cache::unique_id()
+		));
+		drop(Database::open(&path, 3, crate::platform::PlatformKind::Discord).unwrap());
+		let error = prepare_core(
+			path.to_str().unwrap(),
+			crate::platform::PlatformKind::Fluxer,
+			"token",
+			1,
+		)
+		.err()
+		.unwrap();
+		assert!(error.to_string().contains("belongs to platform"));
+		std::fs::remove_file(path).unwrap();
 	}
 
 	#[test]

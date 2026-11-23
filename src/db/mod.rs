@@ -31,10 +31,15 @@ pub use servers::Server;
 pub struct Database {
 	conn: Connection,
 	history_limit: usize,
+	platform: crate::platform::PlatformKind,
 }
 
 impl Database {
-	pub fn open(path: impl AsRef<Path>, history_limit: usize) -> Result<Self> {
+	pub fn open(
+		path: impl AsRef<Path>,
+		history_limit: usize,
+		platform: crate::platform::PlatformKind,
+	) -> Result<Self> {
 		let path = path.as_ref();
 		let conn = Connection::open(path)
 			.with_context(|| format!("failed to open database {}", path.display()))?;
@@ -45,15 +50,45 @@ impl Database {
 		.context("failed to set pragmas")?;
 
 		initialize_schema(&conn)?;
+		{
+			use rusqlite::OptionalExtension;
+			let stored: Option<String> = conn
+				.query_row(
+					"SELECT value FROM metadata WHERE key = 'platform'",
+					[],
+					|row| row.get(0),
+				)
+				.optional()
+				.context("failed to read database platform")?;
+			if let Some(stored) = stored {
+				anyhow::ensure!(
+					stored == platform.as_str(),
+					"database {} belongs to platform {stored}, not {}; use a separate database per platform",
+					path.display(),
+					platform.as_str()
+				);
+			} else {
+				conn.execute(
+					"INSERT INTO metadata (key, value) VALUES ('platform', ?1)",
+					rusqlite::params![platform.as_str()],
+				)
+				.context("failed to record database platform")?;
+			}
+		}
 
 		Ok(Self {
 			conn,
 			history_limit,
+			platform,
 		})
 	}
 
 	pub(crate) fn connection(&self) -> &Connection {
 		&self.conn
+	}
+
+	pub(crate) fn platform(&self) -> crate::platform::PlatformKind {
+		self.platform
 	}
 
 	pub(crate) fn history_limit(&self) -> usize {
@@ -169,8 +204,6 @@ impl Database {
 				cleaned += 1;
 			}
 		}
-
-
 
 		// Normalize legacy provider names at startup instead of failing.
 		{
@@ -390,7 +423,12 @@ fn initialize_schema(conn: &Connection) -> Result<()> {
 	let tx = conn.unchecked_transaction()?;
 	let conn = &tx;
 	conn.execute_batch(
-		"CREATE TABLE IF NOT EXISTS servers (
+		"CREATE TABLE IF NOT EXISTS metadata (
+                key TEXT PRIMARY KEY,
+                value TEXT NOT NULL
+            );
+
+            CREATE TABLE IF NOT EXISTS servers (
                 guild_id INTEGER PRIMARY KEY,
                 name TEXT NOT NULL,
                 validated INTEGER NOT NULL DEFAULT 0,

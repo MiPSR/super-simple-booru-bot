@@ -865,7 +865,7 @@ fn items(
 		"settings" => {
 			let mut all: HashMap<String, String> = crate::settings::DEFAULTS
 				.iter()
-				.map(|(k, v)| (k.to_string(), v.to_string()))
+				.map(|(k, _)| (k.to_string(), crate::settings::default_value(db, k)))
 				.collect();
 			all.extend(db.get_all_settings()?);
 			let mut all = all
@@ -1164,12 +1164,12 @@ fn apply(handler: &Handler, user: u64, guild: Option<i64>, a: &Action) -> Result
 		("settings", "delete") => db.delete_setting(target(a)?)?,
 		("settings", "reset") => {
 			let key = target(a)?;
-			let value = crate::settings::DEFAULTS
-				.iter()
-				.find(|(k, _)| *k == key)
-				.context("custom settings have no default; delete instead")?
-				.1;
-			db.set_setting(key, value)?;
+			anyhow::ensure!(
+				crate::settings::DEFAULTS.iter().any(|(k, _)| *k == key),
+				"custom settings have no default; delete instead"
+			);
+			let value = crate::settings::default_value(&db, key);
+			db.set_setting(key, &value)?;
 		}
 		("servers", "validate" | "unvalidate") => {
 			db.set_validated(target(a)?.parse()?, a.operation == "validate")?

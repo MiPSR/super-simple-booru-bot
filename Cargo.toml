@@ -6,7 +6,9 @@ license = "AGPL-3.0-only"
 
 [dependencies]
 anyhow = "1.0.104"
+async-trait = "0.1.83"
 chrono = "0.4"
+fluxer-neptunium = { version = "0.10.1", default-features = false, features = ["native-tls"] }
 image = { version = "0.25.10", default-features = false, features = ["jpeg", "png", "gif", "webp", "bmp"] }
 rand = "0.10.3"
 reqwest = { version = "0.13.5", default-features = false, features = ["json", "native-tls"] }

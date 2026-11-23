@@ -100,5 +100,6 @@ pub(super) fn open_test_db() -> Database {
 	Database {
 		conn,
 		history_limit: 3,
+		platform: crate::platform::PlatformKind::Discord,
 	}
 }

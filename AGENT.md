@@ -1,8 +1,9 @@
 # Agent specification
 
-Rust Discord bot with SQLite-driven providers, patterns and guild commands. All
-provider behavior is configured; do not introduce provider-specific Rust branches.
-There is intentionally no NSFW flag or content-rating behavior.
+Rust Discord and Fluxer bot with SQLite-driven providers, patterns and guild commands.
+Both platforms may run in one process; each uses its own database. All provider
+behavior is configured; do not introduce provider-specific Rust branches. There is
+intentionally no NSFW flag or content-rating behavior.
 
 ## Runtime and deployment
 
@@ -10,8 +11,14 @@ There is intentionally no NSFW flag or content-rating behavior.
   `./secrets.toml`. NixOS default is `/var/lib/super-simple-booru-bot/secrets.toml`.
 - Never import, generate or embed secret contents through Nix. Secrets are manually
   provisioned, service-user owned and mode `0600`. The state directory is `0700`.
-- `SUPER_SIMPLE_BOORU_BOT_DB_PATH` selects SQLite; default is `super-simple-booru-bot.sqlite3`, relative to
-  the working directory. NixOS exposes `dataDir`, `secretsFile` (a string) and `dbPath`.
+- `SUPER_SIMPLE_BOORU_BOT_DB_PATH` selects the Discord SQLite database; default is
+  `super-simple-booru-bot.sqlite3`. `SUPER_SIMPLE_BOORU_BOT_FLUXER_DB_PATH` selects the
+  Fluxer database; default is `super-simple-booru-bot-fluxer.sqlite3`. A database is
+  bound to one platform. NixOS exposes `dataDir`, `secretsFile` (a string), `dbPath`
+  and `fluxerDbPath`.
+- Secrets configure `[discord]`, `[fluxer]` or both; at least one platform is required.
+  Legacy top-level Discord keys remain accepted. Fluxer discovers its API and gateway
+  from `/.well-known/fluxer` and requires HTTPS except for localhost.
 - The flake defines and exports the package directly, including its build-input
   selection. Keep runtime secrets and databases out of build inputs.
 - Startup errors exit nonzero and print useful contextual errors to stderr/systemd.
@@ -52,6 +59,10 @@ There is intentionally no NSFW flag or content-rating behavior.
 - `/reload`, `/booru-test booru:NAME tags:CSV`, `/tag-test tag:NAME` expose important
   operations without navigating the panel. Tests are ephemeral and do not alter
   history; slash tag tests honor server/channel configuration.
+- Prefix commands mirror the public commands and expose text administration through
+  `!administrate`. Fluxer enables prefix commands by default; Discord disables them by
+  default. The default prefix is `!` and is configurable with `command_prefix`.
+  Discord prefix mode requests the privileged Message Content intent.
 - Validated guilds also register `<provider>-custom`, whitelisted pattern names and
   `/art-history previous_arts:COUNT`. Empty server whitelist means no pattern commands.
 - Custom commands require `tag_1`; total options are `max_tags`, or 9 when zero.
@@ -116,9 +127,9 @@ at startup, and when reading values. Settings and custom parameters are loaded l
 do not silently keep a stale startup snapshot after panel edits. Channel locale
 overrides fall back to the configured application locale.
 
-Reload stops accepting new jobs, drains jobs for up to 30 seconds, cancels unfinished
-interaction work if necessary, and refuses to start a second client if cancellation
-or shutdown cannot complete. Await shard-manager shutdown **while Client::start is
+Reload affects only the platform it was requested on. It stops accepting new jobs,
+drains jobs for up to 30 seconds, cancels unfinished interaction work if necessary, and
+refuses to start a second client if cancellation or shutdown cannot complete. Await shard-manager shutdown **while Client::start is
 still running**, then join that client before starting another loop. Notifications
 must not lose completion signals. SIGTERM/SIGINT follow the same shutdown lifecycle.
 

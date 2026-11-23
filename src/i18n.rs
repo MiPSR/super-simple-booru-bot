@@ -102,6 +102,10 @@ impl I18n {
 		self.text("administrate_action_description")
 	}
 
+	pub fn administrate_help(&self) -> &'static str {
+		self.text("administrate_help")
+	}
+
 	pub fn pattern_command_description(&self, pattern: &str) -> String {
 		self.render("pattern_command_description", &[("pattern", pattern)])
 	}

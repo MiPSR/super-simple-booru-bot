@@ -5,6 +5,7 @@ mod config;
 mod db;
 mod i18n;
 mod pacing;
+mod platform;
 mod settings;
 
 use anyhow::Result;

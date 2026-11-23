@@ -1,5 +1,5 @@
 {
-  description = "Super Simple Booru Bot - Rust Discord bot";
+  description = "Super Simple Booru Bot - Rust Discord and Fluxer bot";
 
   inputs = {
     nixpkgs.url = "github:NixOS/nixpkgs/nixos-unstable";
@@ -30,7 +30,7 @@
         nativeBuildInputs = [ pkgs.pkg-config ];
         buildInputs = [ pkgs.openssl ];
         meta = {
-          description = "Discord bot that returns random booru images from configurable tag presets";
+          description = "Discord and Fluxer bot that returns random booru images from configurable tag presets";
           mainProgram = "super-simple-booru-bot";
           platforms = [ "x86_64-linux" ];
         };
@@ -71,6 +71,7 @@
       module-contract =
         assert service.environment.SUPER_SIMPLE_BOORU_BOT_SECRETS_FILE == "/var/lib/super-simple-booru-bot/runtime-only.toml";
         assert service.environment.SUPER_SIMPLE_BOORU_BOT_DB_PATH == "audit.sqlite3";
+        assert service.environment.SUPER_SIMPLE_BOORU_BOT_FLUXER_DB_PATH == "super-simple-booru-bot-fluxer.sqlite3";
         assert service.serviceConfig.Restart == "on-failure";
         assert !(builtins.hasAttr "secretsText" testSystem.options.services.superSimpleBooruBot);
         assert !(pkgs.lib.hasInfix "printf" service.preStart);
@@ -107,6 +108,12 @@
         dbPath = lib.mkOption {
           type = lib.types.str;
           default = "super-simple-booru-bot.sqlite3";
+          description = "Discord database path. Fluxer uses fluxerDbPath so both platforms can run at once.";
+        };
+        fluxerDbPath = lib.mkOption {
+          type = lib.types.str;
+          default = "super-simple-booru-bot-fluxer.sqlite3";
+          description = "Fluxer database path.";
         };
       };
 
@@ -125,13 +132,14 @@
         systemd.tmpfiles.rules = [ "d ${cfg.dataDir} 0700 super-simple-booru-bot super-simple-booru-bot -" ];
 
         systemd.services.super-simple-booru-bot = {
-          description = "Super Simple Booru Bot Discord bot";
+          description = "Super Simple Booru Bot";
           after = [ "network-online.target" ];
           wants = [ "network-online.target" ];
           wantedBy = [ "multi-user.target" ];
           environment = {
             SUPER_SIMPLE_BOORU_BOT_SECRETS_FILE = cfg.secretsFile;
             SUPER_SIMPLE_BOORU_BOT_DB_PATH = cfg.dbPath;
+            SUPER_SIMPLE_BOORU_BOT_FLUXER_DB_PATH = cfg.fluxerDbPath;
             SSL_CERT_FILE = "${pkgs.cacert}/etc/ssl/certs/ca-bundle.crt";
           };
           serviceConfig = {

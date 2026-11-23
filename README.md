@@ -1,9 +1,12 @@
 # Super Simple Booru Bot
 
-Database-configured Rust Discord bot. Fetch random posts, maintain per-channel
-history, and manage providers and permissions through a private `/administrate`
-panel. Provider-specific URLs, headers, tag paths and credentials are configuration,
-not hardcoded integrations.
+Database-configured Rust Discord and Fluxer bot. Fetch random posts, maintain
+per-channel history, and manage providers and permissions through a private
+`/administrate` panel on Discord or text commands on either platform. Provider-specific
+URLs, headers, tag paths and credentials are configuration, not hardcoded integrations.
+
+Discord and Fluxer can run at the same time or independently. Each platform uses its own
+SQLite database and admin user ID. At least one platform must be configured.
 
 ## Discord setup
 
@@ -16,6 +19,22 @@ Record the bot token, application ID and your Discord user ID. The configured us
 is the **administrator everywhere**. Moderators are explicitly assigned **per guild**;
 Discord's own moderator/administrator permissions do not grant bot-administration
 access automatically.
+
+## Fluxer setup
+
+Create an application and bot on your Fluxer instance. Fluxer bot tokens have the form
+`APPLICATION_ID.SECRET`. Add the bot to communities with View Channels, Send Messages,
+Embed Links and Attach Files in the channels it will use.
+
+Fluxer does not currently expose bot slash commands, buttons or modals. This bot uses
+**prefix commands** on Fluxer (default prefix `!`), including the administration
+commands. Discord can also use prefix commands, but they are disabled by default
+there. Discord prefix commands require the privileged **Message Content** intent in the
+Discord Developer Portal.
+
+For self-hosted Fluxer, set the instance origin in the secrets file. The bot reads the
+API and gateway addresses from `/.well-known/fluxer`; it does not derive or hardcode
+them.
 
 ## NixOS installation
 
@@ -44,7 +63,8 @@ The defaults are:
 - dedicated user/group: `super-simple-booru-bot`;
 - working directory: `/var/lib/super-simple-booru-bot`, mode `0700`;
 - runtime secrets: `/var/lib/super-simple-booru-bot/secrets.toml`;
-- database: `/var/lib/super-simple-booru-bot/super-simple-booru-bot.sqlite3`.
+- Discord database: `/var/lib/super-simple-booru-bot/super-simple-booru-bot.sqlite3`;
+- Fluxer database: `/var/lib/super-simple-booru-bot/super-simple-booru-bot-fluxer.sqlite3`.
 
 Rebuild your configuration to create the service account and data directory:
 
@@ -64,13 +84,40 @@ sudoedit /var/lib/super-simple-booru-bot/secrets.toml
 ```
 
 Do not run that `install /dev/null` command over an existing secrets file: it
-replaces its contents. Required TOML:
+replaces its contents. A Discord-only file can keep the legacy shape:
 
 ```toml
 discord_token = "your-bot-token"
 admin_user_id = 123456789012345678
 discord_application_id = 123456789012345678
 ```
+
+A Fluxer-only deployment:
+
+```toml
+[fluxer]
+token = "123456789012345678.your-fluxer-bot-token"
+admin_user_id = 123456789012345678   # your Fluxer user ID
+instance = "https://fluxer.app"      # or your self-hosted origin
+```
+
+Both platforms at once:
+
+```toml
+[discord]
+token = "your-discord-bot-token"
+application_id = 123456789012345678
+admin_user_id = 123456789012345678
+
+[fluxer]
+token = "123456789012345678.your-fluxer-bot-token"
+admin_user_id = 987654321098765432
+instance = "https://fluxer.app"
+```
+
+At least one of `[discord]` or `[fluxer]` is required. Each enabled platform needs its
+own token, application ID (Discord) and administrator user ID. The legacy top-level
+Discord keys remain accepted. Fluxer requires HTTPS except for localhost.
 
 Then start the service:
 
@@ -91,7 +138,8 @@ services.superSimpleBooruBot = {
   enable = true;
   dataDir = "/var/lib/super-simple-booru-bot";
   secretsFile = "/var/lib/super-simple-booru-bot/secrets.toml"; # STRING, runtime path only
-  dbPath = "super-simple-booru-bot.sqlite3"; # relative to dataDir, or an absolute writable path
+  dbPath = "super-simple-booru-bot.sqlite3"; # Discord DB, relative to dataDir
+  fluxerDbPath = "super-simple-booru-bot-fluxer.sqlite3"; # Fluxer DB
 };
 ```
 
@@ -125,8 +173,9 @@ cd "$HOME/.local/state/super-simple-booru-bot"
 /absolute/path/to/checkout/result/bin/super-simple-booru-bot
 ```
 
-Paths can instead be set with `SUPER_SIMPLE_BOORU_BOT_SECRETS_FILE` and `SUPER_SIMPLE_BOORU_BOT_DB_PATH`.
-There are no CLI flags or doctor mode. For a direct flake run, first enter the state
+Paths can instead be set with `SUPER_SIMPLE_BOORU_BOT_SECRETS_FILE`,
+`SUPER_SIMPLE_BOORU_BOT_DB_PATH` (Discord) and `SUPER_SIMPLE_BOORU_BOT_FLUXER_DB_PATH`
+(Fluxer). There are no CLI flags or doctor mode. For a direct flake run, first enter the state
 directory containing your runtime secrets, then use `nix run github:MiPSR/super-simple-booru-bot`.
 
 Development uses the pinned flake toolchain:
@@ -145,8 +194,10 @@ bundle automatically. On other deployments, ensure system CA certificates exist;
 
 ## First-time configuration
 
-1. Run `/administrate` in your server as the configured administrator.
-2. Under **Servers**, validate the server. This page is always available to you.
+1. Run `/administrate` in your server as the configured administrator. On Fluxer or
+   with Discord prefix commands enabled, use `!administrate help` instead.
+2. Under **Servers** (or `!administrate server validate`), validate the server. This
+   page is always available to you.
 3. Add a **Booru** using its name, description, URLs JSON, paths JSON and options
    JSON. The form includes editable examples; replace `example.org` with your API.
 4. Set any provider custom parameters and reference them through `env_params`.
@@ -167,6 +218,8 @@ before replacement validation.
 
 ### Commands
 
+Discord slash commands:
+
 - `/administrate`: full management panel.
 - `/reload`: administrator or guild moderator; drain active jobs, await old gateway
   shutdown, reload runtime secrets/configuration, then reconnect.
@@ -177,6 +230,21 @@ before replacement validation.
 - `/<pattern>`: random enabled provider for a pattern whitelisted in this server.
 - `/art-history previous_arts:COUNT`: recent links for the current channel; long
   results are attached as text.
+
+Prefix commands (Fluxer defaults to enabled; Discord defaults to disabled):
+
+- `!help`, `!status`, `!reload`
+- `!booru-test <name> <tags>`, `!tag-test <tag>`
+- `!<provider>-custom <tags>`, `!<pattern>`
+- `!art-history [count]`
+- `!dm <reference>`: send a retained post to your DMs.
+- `!administrate <action>`: text administration. Use `!administrate help` for the list.
+  On Fluxer this is the administrative interface; prefer a DM or private channel because
+  Fluxer has no ephemeral messages.
+
+Enable or disable prefix commands with the `prefix_enabled` setting and change the
+prefix with `command_prefix` (default `!`). On Discord, enabling prefix commands adds
+the `GUILD_MESSAGES` and privileged `MESSAGE_CONTENT` intents.
 
 Provider and pattern tests do not add entries to art history. Normal deliveries
 are recorded only after successful Discord delivery. Guild commands are initialized
@@ -219,23 +287,28 @@ filtering. Blacklists are case-normalized.
 | `command_sync_interval_secs` | `86400` |
 | `http_timeout_secs` | `30` per request |
 | `max_concurrent_jobs` | `4` |
+| `prefix_enabled` | `false` on Discord, `true` on Fluxer |
+| `command_prefix` | `!` |
 
 Per-provider `pace_ms` additionally limits that provider across concurrent requests.
 Downloads are bounded (8 MiB JSON, 40 MiB images); oversized attachments are
 compressed off the async runtime and rejected if still over 10 MiB. The bot does
 not retain image bytes in memory between interactions.
 
-**Send to DM** buttons use persistent random references scoped to the source
-channel. For posts in art history, references survive reload/restart and disappear
-when that history entry is pruned. Posts without a history source use a bounded
-per-channel fallback retained for up to 24 hours. Inline DM images are downloaded
-again, so deleted provider files or expired authenticated URLs may no longer work.
+**Send to DM** buttons (Discord) and `!dm <reference>` (both platforms) use persistent
+random references scoped to the source channel. For posts in art history, references
+survive reload/restart and disappear when that history entry is pruned. Posts without a
+history source use a bounded per-channel fallback retained for up to 24 hours. Inline
+DM images are downloaded again, so deleted provider files or expired authenticated URLs
+may no longer work.
 
 ## Backups and upgrades
 
 Stop the service before copying the state directory, or use SQLite's online backup
-API; do not copy only the database file while ignoring its WAL. The database holds
-provider custom parameters as well as history, so treat its backup as sensitive.
+API; do not copy only the database file while ignoring its WAL. Each database is bound
+to one platform; a Discord database will be rejected by Fluxer and vice versa. The
+database holds provider custom parameters as well as history, so treat its backup as
+sensitive.
 
 Schema changes are versioned and transactional. Legacy `count_url NOT NULL`
 databases migrate to optional count URLs. Very old channel allowlists require
